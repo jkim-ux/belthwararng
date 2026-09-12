@@ -1,0 +1,36 @@
+[gd_resource type="Resource" script_class="CombatTuning" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/combat_tuning.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+move_speed_x = 300.0
+move_speed_y = 200.0
+accel_ms = 50.0
+decel_ms = 40.0
+input_buffer_ms = 120.0
+hitstop_light_ms = 35.0
+hitstop_strong_ms = 60.0
+dodge_ms = 180.0
+dodge_invuln_ms = 100.0
+dodge_cooldown_ms = 900.0
+dodge_distance = 210.0
+jump_velocity = 620.0
+gravity = 2500.0
+player_max_hp = 100
+player_attack = 20.0
+player_hitstun_ms = 300.0
+player_half_width = 22.0
+player_half_depth = 10.0
+player_height = 70.0
+enemy_max_hp = 65
+enemy_attack_damage = 10
+enemy_speed_x = 150.0
+enemy_speed_y = 110.0
+enemy_telegraph_ms = 500.0
+enemy_attack_active_ms = 100.0
+enemy_recover_ms = 800.0
+enemy_idle_ms = 400.0
+enemy_attack_reach = 80.0
+enemy_down_ms = 600.0
+enemy_getup_protect_ms = 500.0

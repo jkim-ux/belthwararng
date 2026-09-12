@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="SkillData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/skill_data.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = &"pajingyeok"
+display_name = "파진격"
+key_label = "Q"
+action_name = &"skill_q"
+cooldown_ms = 12000
+implemented = false
+ground_only = true

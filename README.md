@@ -11,6 +11,7 @@
 | [CLAUDE.md](CLAUDE.md) | 개발 작업의 공통 진행 규칙 |
 | handoffs/ | 작성 날짜와 시각이 붙은 개별 작업 지시 |
 | [reports/README.md](reports/README.md) | 개발 결과를 기록하는 방법 |
+| [game/README.md](game/README.md) | Godot 프로젝트 실행 방법, 조작, 자동 검증 (HWR-001 부터) |
 
 ## 함께 작업하는 방식
 

@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="SkillData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/skill_data.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = &"hoepungcham"
+display_name = "회풍참"
+key_label = "F"
+action_name = &"skill_f"
+cooldown_ms = 10000
+implemented = false
+ground_only = true
