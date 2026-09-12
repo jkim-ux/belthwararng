@@ -89,7 +89,16 @@ func _read_file(p: String) -> Dictionary:
 		return {"ok": false, "data": {}, "error": "JSON 최상위가 객체가 아님"}
 	return {"ok": true, "data": parsed, "error": ""}
 
+## 현재 정상 저장을 별도 이름(path + suffix)으로 한 번 보존한다(형식 이전용). 이미 있으면 덮어쓰지 않는다. 보존 경로 또는 "".
+func preserve_copy(suffix: String) -> String:
+	var dst := path + suffix
+	if not FileAccess.file_exists(path):
+		return ""
+	if FileAccess.file_exists(dst):
+		return dst
+	return dst if DirAccess.copy_absolute(path, dst) == OK else ""
+
 func delete_all() -> void:
-	for p in [path, backup_path(), tmp_path()]:
+	for p in [path, backup_path(), tmp_path(), path + ".v1.bak"]:
 		if FileAccess.file_exists(p):
 			DirAccess.remove_absolute(p)

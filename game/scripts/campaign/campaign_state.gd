@@ -1,12 +1,19 @@
 class_name CampaignState
 extends RefCounted
-## 캠페인 영구 상태(저장 대상). 정의(CampaignData)와 분리되며 파생값(공격력·진입 가능)은 저장하지 않고 계산한다.
+## 캠페인 영구 상태(저장 대상). 정의(CampaignData)와 분리되며 파생값(공격력·진입 가능·물 연결)은 저장하지 않고 계산한다.
 ## 모든 변경 함수는 규칙을 검증하고 {ok, reason} 를 돌려준다. 거부되면 상태는 바뀌지 않는다.
+## schema 2(HWR-005): 목재/석재/식량, 마을별 배치·주민·개간 상태, 일회성 복구 물자 기록을 추가한다. schema 1 은 이전한다.
 
-const SCHEMA_VERSION := 1
+const SCHEMA_VERSION := 2
 
 var schema_version: int = SCHEMA_VERSION
 var currency: int = 0
+var wood: int = 0                          ## 해방 마을이 공유하는 저장고(HWR-005)
+var stone: int = 0
+var food: int = 0
+var villages: Dictionary = {}              ## site_id -> VillageState (마을별 배치·주민·개간)
+var supplies_granted: Array = []           ## 초기 물자를 지급한 site_id (String), 1회
+var migrated_from: int = 0                 ## 로드 시 이전한 원본 schema (실행 값, 저장하지 않음)
 var sites: Dictionary = {}                 ## site_id -> {"liberated": bool, "management": int, "repaired": bool}
 var facilities: Dictionary = {}            ## facility_id -> true
 var cleared_chapters: Array = []           ## String
@@ -24,6 +31,13 @@ func duplicate_state() -> CampaignState:
 	var s := CampaignState.new()
 	s.schema_version = schema_version
 	s.currency = currency
+	s.wood = wood
+	s.stone = stone
+	s.food = food
+	for k in villages.keys():
+		s.villages[k] = villages[k].duplicate_state()
+	s.supplies_granted = supplies_granted.duplicate()
+	s.migrated_from = migrated_from
 	s.sites = sites.duplicate(true)
 	s.facilities = facilities.duplicate(true)
 	s.cleared_chapters = cleared_chapters.duplicate()
@@ -33,9 +47,17 @@ func duplicate_state() -> CampaignState:
 	return s
 
 func to_dict() -> Dictionary:
+	var v := {}
+	for k in villages.keys():
+		v[k] = villages[k].to_dict()
 	return {
-		"schema_version": schema_version,
+		"schema_version": SCHEMA_VERSION,
 		"currency": currency,
+		"wood": wood,
+		"stone": stone,
+		"food": food,
+		"villages": v,
+		"supplies_granted": supplies_granted.duplicate(),
 		"sites": sites.duplicate(true),
 		"facilities": facilities.duplicate(true),
 		"cleared_chapters": cleared_chapters.duplicate(),
@@ -45,17 +67,20 @@ func to_dict() -> Dictionary:
 	}
 
 ## 저장 데이터를 검증하며 읽는다. 형식이 맞지 않으면 null 을 돌려주고 error 에 이유를 적는다.
-## 알 수 없는 상위 schema_version 은 읽지 않는다(임의로 낮춰 읽지 않음).
+## schema 1 은 2 로 이전한다(migrated_from = 1). 알 수 없는 상위 schema_version 은 읽지 않는다(임의로 낮춰 읽지 않음).
 static func from_dict(d: Variant, data: CampaignData, error: Array) -> CampaignState:
 	if typeof(d) != TYPE_DICTIONARY:
 		error.append("저장 데이터가 객체가 아님")
 		return null
 	var ver := int(d.get("schema_version", -1))
-	if ver != SCHEMA_VERSION:
-		error.append("지원하지 않는 schema_version %d (지원: %d)" % [ver, SCHEMA_VERSION])
+	if ver != SCHEMA_VERSION and ver != 1:
+		error.append("지원하지 않는 schema_version %d (지원: 1, %d)" % [ver, SCHEMA_VERSION])
 		return null
 	var s := CampaignState.new()
 	s.currency = maxi(0, int(d.get("currency", 0)))
+	s.wood = maxi(0, int(d.get("wood", 0)))
+	s.stone = maxi(0, int(d.get("stone", 0)))
+	s.food = maxi(0, int(d.get("food", 0)))
 	var raw_sites: Variant = d.get("sites", {})
 	if typeof(raw_sites) != TYPE_DICTIONARY:
 		error.append("sites 형식 오류")
@@ -95,7 +120,81 @@ static func from_dict(d: Variant, data: CampaignData, error: Array) -> CampaignS
 		if not chk.ok:
 			error.append("선택 동료 '%s' 정리: %s" % [s.selected_companion_id, chk.reason])
 			s.selected_companion_id = ""
+	# 마을 상태(schema 2) 읽기
+	var raw_granted: Variant = d.get("supplies_granted", [])
+	if typeof(raw_granted) == TYPE_ARRAY:
+		for g in raw_granted:
+			if not s.supplies_granted.has(String(g)):
+				s.supplies_granted.append(String(g))
+	var raw_villages: Variant = d.get("villages", {})
+	if typeof(raw_villages) == TYPE_DICTIONARY:
+		for k in raw_villages.keys():
+			var site := data.site(StringName(String(k)))
+			if site == null or not site.is_village() or data.village_template(site.id) == null:
+				error.append("알 수 없는 마을 '%s' 제외" % String(k))
+				continue
+			var vs := VillageState.from_dict(raw_villages[k], String(k), data, error)
+			if vs.initialized:
+				s.villages[String(k)] = vs
+	if ver == 1:
+		s.migrated_from = 1
+		s._migrate_from_v1(data, error)
 	return s
+
+## schema 1 → 2: 해방 마을에 템플릿·주민 3명을 만들고, 정비 완료는 복구 현장 완공으로, 산 시설은 예약 자리에 완공 배치한다.
+## 비용을 다시 받지 않고 효과 플래그(facilities)는 그대로 둔다. 첫 농촌 물자는 같은 상태에서 한 번 지급한다.
+func _migrate_from_v1(data: CampaignData, error: Array) -> void:
+	for site in data.sites:
+		if not site.is_village() or not is_liberated(site.id):
+			continue
+		var r := ensure_village(site.id, data)
+		if not r.ok:
+			error.append("마을 '%s' 이전 실패: %s" % [String(site.id), r.reason])
+
+# ------------------------------------------------------------------ 마을 (HWR-005)
+
+func village(site_id: StringName) -> VillageState:
+	return villages.get(String(site_id), null)
+
+func has_village(site_id: StringName) -> bool:
+	return villages.has(String(site_id))
+
+## 마을 초기화(1회): 템플릿 적용·주민 3명·초기 물자. 이미 정비/구매한 기록은 완공 건물로 옮긴다.
+## 이미 초기화된 마을이면 changed=false. {ok, reason, changed, supplies}
+func ensure_village(site_id: StringName, data: CampaignData) -> Dictionary:
+	var site := data.site(site_id)
+	if site == null or not site.is_village():
+		return {"ok": false, "reason": "마을이 아님", "changed": false, "supplies": {}}
+	if not is_liberated(site_id):
+		return {"ok": false, "reason": "해방 전에는 들어갈 수 없음", "changed": false, "supplies": {}}
+	var template := data.village_template(site_id)
+	if template == null:
+		return {"ok": false, "reason": "마을 템플릿 없음", "changed": false, "supplies": {}}
+	if has_village(site_id):
+		return {"ok": true, "reason": "", "changed": false, "supplies": {}}
+	var vs := VillageState.create(String(site_id))
+	# 기존 정비 완료 → 고정 복구 현장 완공(비용 없음)
+	if is_repaired(site_id):
+		var repair_def := data.building(&"repair")
+		var rr := template.repair_site()
+		if repair_def != null and rr.size.x > 0:
+			vs.add_building(repair_def, rr.position.x, rr.position.y, 0, true)
+	# 기존 구매 시설 → 예약 자리에 같은 시설 ID 로 완공 배치(효과 플래그는 기존 것 유지)
+	if site.facility != null and has_facility(site.facility.id):
+		var fdef := data.building_for_facility(site.facility.id)
+		if fdef != null:
+			var spot := template.facility_spot
+			vs.add_building(fdef, spot.position.x, spot.position.y, 0, true)
+	villages[String(site_id)] = vs
+	var supplies := {}
+	if not supplies_granted.has(String(site_id)):
+		supplies_granted.append(String(site_id))
+		if site.initial_wood > 0 or site.initial_stone > 0 or site.initial_food > 0:
+			wood += site.initial_wood
+			stone += site.initial_stone
+			food += site.initial_food
+			supplies = {"wood": site.initial_wood, "stone": site.initial_stone, "food": site.initial_food}
+	return {"ok": true, "reason": "", "changed": true, "supplies": supplies}
 
 # ------------------------------------------------------------------ 조회
 
@@ -159,29 +258,8 @@ func can_enter_site(site: SiteDef, data: CampaignData) -> Dictionary:
 			return {"ok": false, "reason": "%s 관리도 %d 필요 (현재 %d, 정비로 올릴 수 있음)" % [prev_name, site.prerequisite_management, management(site.prerequisite_site_id)], "kind": "locked"}
 	return {"ok": true, "reason": "", "kind": "open"}
 
-func can_repair(site: SiteDef) -> Dictionary:
-	if site == null or not site.is_village():
-		return {"ok": false, "reason": "군사 거점에는 정비가 없음"}
-	if not is_liberated(site.id):
-		return {"ok": false, "reason": "미해방 거점"}
-	if is_repaired(site.id):
-		return {"ok": false, "reason": "이미 정비 완료"}
-	if currency < site.repair_cost:
-		return {"ok": false, "reason": "군자금 부족 (%d 필요, 보유 %d)" % [site.repair_cost, currency]}
-	return {"ok": true, "reason": ""}
-
-func can_buy_facility(site: SiteDef) -> Dictionary:
-	if site == null or not site.is_village() or site.facility == null:
-		return {"ok": false, "reason": "구매할 시설이 없음"}
-	if not is_liberated(site.id):
-		return {"ok": false, "reason": "미해방 거점"}
-	if management(site.id) < site.management_on_repair:
-		return {"ok": false, "reason": "관리도 %d 필요 (정비 먼저)" % site.management_on_repair}
-	if has_facility(site.facility.id):
-		return {"ok": false, "reason": "이미 구매함"}
-	if currency < site.facility.cost:
-		return {"ok": false, "reason": "군자금 부족 (%d 필요, 보유 %d)" % [site.facility.cost, currency]}
-	return {"ok": true, "reason": ""}
+## 정비/시설 즉시 구매(schema 1 의 버튼 규칙)는 HWR-005 에서 제거했다.
+## 경로 복구·훈련장·보급창은 마을에서 배치·공사·완공해야 하며(VillageSim), 완공 시 repaired/management/facilities 를 설정한다.
 
 func can_select_companion(companion_id: StringName, data: CampaignData) -> Dictionary:
 	if companion_id == &"":
@@ -230,24 +308,6 @@ func apply_victory(site: SiteDef, data: CampaignData) -> Dictionary:
 				unlocked_companions.append(String(ch.reward_companion_id))
 				result.companion_unlocked = String(ch.reward_companion_id)
 	return result
-
-func apply_repair(site: SiteDef) -> Dictionary:
-	var chk := can_repair(site)
-	if not chk.ok:
-		return chk
-	currency -= site.repair_cost
-	var st: Dictionary = sites[String(site.id)]
-	st.repaired = true
-	st.management = maxi(int(st.management), site.management_on_repair)
-	return {"ok": true, "reason": ""}
-
-func apply_facility(site: SiteDef) -> Dictionary:
-	var chk := can_buy_facility(site)
-	if not chk.ok:
-		return chk
-	currency -= site.facility.cost
-	facilities[String(site.facility.id)] = true
-	return {"ok": true, "reason": ""}
 
 func apply_select_companion(companion_id: StringName, data: CampaignData) -> Dictionary:
 	var chk := can_select_companion(companion_id, data)

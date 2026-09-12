@@ -5,6 +5,8 @@ extends Resource
 @export var chapters: Array[ChapterDef] = []
 @export var sites: Array[SiteDef] = []
 @export var companions: Array[CompanionDef] = []
+@export var buildings: Array[BuildingDef] = []            ## 마을 건물 정의(HWR-005)
+@export var village_templates: Array[VillageTemplate] = []  ## 마을 지형 템플릿(HWR-005)
 
 func chapter(id: StringName) -> ChapterDef:
 	for c in chapters:
@@ -43,4 +45,31 @@ func facility_site(facility_id: StringName) -> SiteDef:
 	for s in sites:
 		if s.facility != null and s.facility.id == facility_id:
 			return s
+	return null
+
+func building(id: StringName) -> BuildingDef:
+	for b in buildings:
+		if b.id == id:
+			return b
+	return null
+
+func village_template(site_id: StringName) -> VillageTemplate:
+	for t in village_templates:
+		if t.site_id == site_id:
+			return t
+	return null
+
+## 특정 마을에서 건설 목록에 보일 건물(마을 제한이 있으면 해당 마을만)
+func buildings_for_site(site_id: StringName) -> Array[BuildingDef]:
+	var out: Array[BuildingDef] = []
+	for b in buildings:
+		if b.site_id == &"" or b.site_id == site_id:
+			out.append(b)
+	return out
+
+## 특수 시설 정의(기존 FacilityDef id 로 찾기)
+func building_for_facility(facility_id: StringName) -> BuildingDef:
+	for b in buildings:
+		if b.facility_id == facility_id:
+			return b
 	return null

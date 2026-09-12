@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="VillageTemplate" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/village_template.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+site_id = &"ch1_farm"
+display_name = "비옥한 들판·강가"
+description = "서쪽 숲과 북동 암반 사이에 비옥한 들판이 세 곳 있다. 동쪽 강가에 보를 세울 자리가 있고, 중앙 통행로 북쪽 끝이 무너진 경로 복구 현장이다."
+terrain_rows = PackedStringArray("WWWWWWWWWWWWW.......QQQQQQQQ~~##", "WW..................QQQQQQQQ~~##", "WW..........................~~##", "WW................ffffff....~~##", "WW................ffffff....~~##", "WW................ffffff....~~##", "WW................ffffff....~~##", "WW................ffffff....~~##", "WW................ffffff....~~##", "WW................ffffff....~~##", "WW.............xx.ffffff.ddd~~##", "WW.............xx........ddd~~##", "WW...pppppppppppppppppppp...~~##", "WW.............pp...........~~##", "WW..fffffffff..pp.ffffff....~~##", "WW..fffffffff..pp.ffffff....~~##", "WW..fffffffff..pp.ffffff....~~##", "WW..fffffffff..pp.ffffff....~~##", "WW..fffffffff..pp.ffffff....~~##", "WW..fffffffff..pp.ffffff....~~##", "WW..fffffffff..pp.ffffff....~~##", "WW..fffffffff..pp.ffffff....~~##", "WW.............pp...........~~##", "WW.............ee...........~~##")
+obstacle_rows = PackedStringArray("................................", ".................r..............", ".............t..................", "....t....t.r......bbbbbb........", "..r..t............bbbbbb........", ".......t..........btbbbbr.......", "..........t.t.....bbbbbb........", "...r..............bbbbbb..r.....", ".............t....bbbbtb........", "..................bbbbbb........", "...t........r.....bbbbbb........", "................................", "................................", "................................", "....bbbbbbbbb.....bbbbbb...r....", "....btbbbbbbb.....bbbbbb.t......", "....bbbbbbbbb.....bbtbbb........", "....bbtbbbbbb.....bbbbbbr.......", "....bbbbbbbbb.....bbbbbb..t.....", "....bbbbbbtbb.....bbbbbb........", "...tbbbbbbbbb.....bbbtbbt.......", "....bbbbbbbbb.....bbbbbb..t.....", "................................", "................................")
+spawn = Vector2i(15, 21)
+dam_outlet = Vector2i(24, 10)
+facility_spot = Rect2i(7, 8, 3, 2)

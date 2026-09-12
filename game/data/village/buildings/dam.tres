@@ -1,0 +1,34 @@
+[gd_resource type="Resource" script_class="BuildingDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/building_def.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = &"dam"
+display_name = "작은 보"
+description = "강가 지정 자리 3×2. 육지 출구에서 연결 농장 4개에 물을 공급한다."
+kind = &"dam"
+size = Vector2i(3, 2)
+cost_currency = 30
+cost_wood = 20
+cost_stone = 20
+work_required = 60.0
+placement = &"dam_site"
+rotatable = false
+movable = false
+demolishable = true
+walkable = false
+needs_door = true
+max_per_village = 1
+requires_management = 0
+site_id = &""
+water_capacity = 4
+produce_kind = &""
+produce_amount = 0
+produce_amount_unfed = 0
+cycle_seconds = 0.0
+eats_food = false
+needs_water = false
+villagers_on_complete = 0
+facility_id = &""
+management_on_complete = 0

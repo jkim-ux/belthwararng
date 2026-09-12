@@ -1,0 +1,34 @@
+[gd_resource type="Resource" script_class="BuildingDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/building_def.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = &"canal"
+display_name = "수로"
+description = "개간한 땅 1칸. 수원과 농장을 상하좌우로 연결한다. 드래그로 여러 칸을 한 번에 놓는다."
+kind = &"canal"
+size = Vector2i(1, 1)
+cost_currency = 0
+cost_wood = 1
+cost_stone = 0
+work_required = 5.0
+placement = &"land"
+rotatable = false
+movable = true
+demolishable = true
+walkable = true
+needs_door = false
+max_per_village = 0
+requires_management = 0
+site_id = &""
+water_capacity = 0
+produce_kind = &""
+produce_amount = 0
+produce_amount_unfed = 0
+cycle_seconds = 0.0
+eats_food = false
+needs_water = false
+villagers_on_complete = 0
+facility_id = &""
+management_on_complete = 0
