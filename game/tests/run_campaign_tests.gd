@@ -1454,11 +1454,17 @@ func test_captain_two_patterns_and_super_armor() -> void:
 		if patterns_seen.size() == 2 and order.size() >= 3:
 			break
 	check(patterns_seen.has(0) and patterns_seen.has(1), "베기·돌진 두 패턴 사용 (%s)" % str(order))
-	var alternates := true
-	for i in range(1, order.size()):
-		if order[i] == order[i - 1]:
-			alternates = false
-	check(alternates, "패턴 교대 (%s)" % str(order))
+	# HWR-004 R1: 교대가 아니라 거리 선택. 둘 다 가능할 때만 '같은 패턴 3회 연속 금지'.
+	var c0: Array[int] = [0, 1]
+	boss.recent_patterns = [0, 0]
+	check(boss._choose_pattern(c0) == 1, "베기 2회 연속 뒤 둘 다 가능하면 돌진")
+	boss.recent_patterns = [1, 1]
+	check(boss._choose_pattern(c0) == 0, "돌진 2회 연속 뒤 둘 다 가능하면 베기")
+	boss.recent_patterns = [0, 1]
+	check(boss._choose_pattern(c0) == 0, "섞여 있으면 베기 우선")
+	var c1: Array[int] = [1]
+	boss.recent_patterns = [1, 1]
+	check(boss._choose_pattern(c1) == 1, "돌진만 가능하면 반복 제한 없이 돌진")
 	boss.change_state(&"idle")
 	boss.state_ticks = 0
 	var info2 := HitInfo.new()
@@ -1471,14 +1477,15 @@ func test_captain_two_patterns_and_super_armor() -> void:
 	var hs := boss.hitstun_ticks
 	boss.receive_hit(info2)
 	check(boss.hitstun_ticks == hs, "연타로 경직 연장 없음")
-	place(boss, b.arena_rect().end.x - 100.0, 540)
+	place(boss, b.arena_rect().end.x - 200.0, 540)
 	place(p, b.arena_rect().end.x - 40.0, 540)
-	boss.pattern_index = 1
+	boss.recent_patterns.clear()
 	boss.change_state(&"approach")
 	for i in 200:
 		b.step(PlayerInput.make())
 		if boss.state == &"recover":
 			break
+	check(boss.current_pattern == 1, "|dx| 160 이면 베기 불가·돌진 후보 (패턴 %d)" % boss.current_pattern)
 	check(boss.floor_pos.x <= b.arena_rect().end.x - boss.half_width + 0.01, "돌진이 경기장 경계에서 멈춤 (x %.0f)" % boss.floor_pos.x)
 	b.queue_free()
 	# 거점별 보스 데이터: 농촌 450 / 창고 550

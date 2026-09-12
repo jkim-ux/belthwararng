@@ -8,6 +8,7 @@ static var _next_instance_id: int = 1
 
 var instance_id: int
 var hit_index: int = 0
+var action_id: int = 0     ## 시전 ID(플레이어). 취소된 시전의 복사본 검증용
 var owner: Node            ## BattleActor
 var team: StringName
 var attack: AttackData
@@ -20,8 +21,13 @@ var x_max: float
 var depth: float
 var z_min: float
 var z_max: float
+var knockback: float = 0.0   ## 이번 타격의 밀림 거리(다단히트는 타격별로 다를 수 있음)
+var ellipse: bool = false    ## 바닥 타원 판정(강인병 내려찍기)
+var rx: float = 0.0
+var ry: float = 0.0
 var applied_targets: Array = []
 var active: bool = false
+var cancelled: bool = false  ## 소유자가 end_hitboxes 로 거둔 판정. 복사본에서도 적용하지 않는다
 
 func _init(p_owner: Node, p_team: StringName, p_attack: AttackData, p_damage: float, p_hitstop_ticks: int, p_facing: int) -> void:
 	instance_id = _next_instance_id
@@ -41,6 +47,10 @@ func _init(p_owner: Node, p_team: StringName, p_attack: AttackData, p_damage: fl
 	depth = attack.depth_tolerance
 	z_min = attack.z_min
 	z_max = attack.z_max
+	knockback = attack.knockback
+	ellipse = attack.shape_ellipse
+	rx = attack.ellipse_rx
+	ry = attack.ellipse_ry
 
 ## 절대 좌표 범위 (디버그 표시와 판정에 공통 사용)
 func world_x_range(origin: Vector2) -> Vector2:
@@ -51,6 +61,14 @@ func world_y_range(origin: Vector2) -> Vector2:
 
 func world_z_range(origin_z: float) -> Vector2:
 	return Vector2(origin_z + z_min, origin_z + z_max)
+
+## 대상 발 위치가 공격자 발 위치 중심 타원 안(경계 포함)인가
+func in_ellipse(origin: Vector2, foot: Vector2) -> bool:
+	if rx <= 0.0 or ry <= 0.0:
+		return false
+	var nx := (foot.x - origin.x) / rx
+	var ny := (foot.y - origin.y) / ry
+	return nx * nx + ny * ny <= 1.0
 
 func already_hit(target: Node) -> bool:
 	return applied_targets.has(target)

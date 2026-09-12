@@ -4,7 +4,8 @@ extends Resource
 ## 시간은 ms 단위로 적고 실행 시 Ticks.from_ms 로 양자화한다.
 
 ## 검 궤적 표시 방식. LEGACY 는 M1 의 앞쪽 사각형, 나머지는 R1 의 몸·검 연출.
-enum Swing { LEGACY = 0, HORIZONTAL = 1, HORIZONTAL_REVERSE = 2, DIAGONAL_DOWN = 3 }
+## HWR-004: OVERHEAD(내려베기) / SPIN(회전베기) / THRUST(방어깨기) / WAVE(검기 발사 자세) / GUARD(흘려받기) / FLURRY(일섬연무)
+enum Swing { LEGACY = 0, HORIZONTAL = 1, HORIZONTAL_REVERSE = 2, DIAGONAL_DOWN = 3, OVERHEAD = 4, SPIN = 5, THRUST = 6, WAVE = 7, GUARD = 8, FLURRY = 9 }
 
 @export var id: StringName = &""
 @export var display_name: String = ""
@@ -29,6 +30,45 @@ enum Swing { LEGACY = 0, HORIZONTAL = 1, HORIZONTAL_REVERSE = 2, DIAGONAL_DOWN =
 @export var knockback_ms: float = 0.0
 @export var launch: bool = false           ## 일반 적을 짧게 띄움
 @export var launch_velocity: float = 520.0 ## 띄우기 초기 상승 속도 (px/s)
+
+@export_group("HWR-004 효과 구분")
+## 흘려받기(E)로 막을 수 있는 공격인가. 적 공격 전용. 강인병 주변 내려찍기·바닥 불은 false.
+@export var parryable: bool = true
+## 내려베기(D): 일반 적을 다운시킨다(지상: 즉시 down, 공중: 하강 속도 ≥500 으로 착지 후 down). 강인병/보스는 무시.
+@export var knockdown: bool = false
+## 방어깨기(Q): 강인병에게 전용 자세 무너짐 1초. 일반 적은 hitstun/knockback 값대로 강한 경직.
+@export var guard_break: bool = false
+## Q/W/R: 보스가 어느 상태에서도 피해·섬광만 받고 짧은 경직·피격 타격 정지가 없다.
+@export var ignores_boss_flinch: bool = false
+## 회복 구간을 이동으로 취소한 뒤에도 남은 행동 제한(평타·점프·스킬 금지)을 유지한다. 신규 스킬 전용, A/S 는 false.
+@export var lock_after_cancel: bool = false
+## 회피로 넘어갈 수 있는 구간(회복 마지막 N ms). 0 이면 move_cancel_ms 와 같다.
+@export var dodge_cancel_ms: float = 0.0
+## 판정 모양: true 면 공격자 발 위치를 중심으로 한 바닥 타원(반경 rx/ry) 안의 대상 발 위치 + 높이 겹침으로 판정한다.
+@export var shape_ellipse: bool = false
+@export var ellipse_rx: float = 110.0
+@export var ellipse_ry: float = 45.0
+
+@export_group("HWR-004 다단히트 (일섬연무)")
+## 0 이면 단일 타격(기존). 양수면 타격 구간 안에서 interval 간격으로 N 개의 타격을 각각 hit_index 로 만든다.
+@export var multi_hits: int = 0
+@export var multi_hit_interval_ms: float = 100.0
+@export var multi_hit_active_ticks: int = 2
+## 마지막 타격에만 knockback 을 적용한다(다른 타격은 밀림 0).
+@export var knockback_last_hit_only: bool = false
+
+@export_group("HWR-004 투사체 (검기)")
+## true 면 타격 시작 틱에 근접 판정 대신 투사체 1개를 발사한다.
+@export var fires_projectile: bool = false
+@export var projectile_speed: float = 700.0
+@export var projectile_range: float = 500.0     ## 중심 최대 이동 거리
+@export var projectile_height: float = 35.0
+@export var projectile_half_height: float = 12.0
+@export var projectile_half_depth: float = 12.0
+@export var projectile_half_length: float = 10.0
+@export var projectile_life_ticks: int = 43
+@export var projectile_pierce: int = 3           ## 최대 적중 적 수(대상당 1회). 0 이면 단일 대상(화살)
+@export var projectile_spawn_offset: float = 30.0
 
 @export_group("판정 범위 (바닥 좌표 기준, 공격자 발 위치 기준)")
 @export var reach_forward: float = 90.0    ## 바라보는 방향으로의 도달 거리
@@ -67,3 +107,9 @@ func move_cancel_ticks() -> int:
 
 func knockback_ticks() -> int:
 	return Ticks.from_ms(knockback_ms)
+
+func dodge_cancel_ticks() -> int:
+	return Ticks.from_ms(dodge_cancel_ms if dodge_cancel_ms > 0.0 else move_cancel_ms)
+
+func multi_hit_interval_ticks() -> int:
+	return Ticks.from_ms(multi_hit_interval_ms)

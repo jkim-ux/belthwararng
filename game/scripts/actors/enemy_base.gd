@@ -14,13 +14,18 @@ var knockback_total: float = 0.0     ## 이번 밀림의 총 거리
 var knockback_ticks: int = 0         ## 곡선 밀림 기간(0 = 일정 속도)
 var knockback_t: int = 0             ## 곡선 밀림 진행 틱
 var required_for_victory: bool = true   ## 캠페인 승리 조건에 세는 적인지(허수아비는 false)
+var falling_by_knockdown: bool = false  ## 공중에서 내려베기를 맞아 강제 하강 중(착지 전 추가 띄우기 금지)
 
 func _on_hit(info: HitInfo) -> void:
+	# HWR-004 내려베기(D): '이미 공중이면 피해만' 보다 먼저 검사한다. 강인병/보스는 이 경로에 들어오지 않는다(재정의).
+	if info.attack.knockdown and can_be_launched:
+		_apply_knockdown(info)
+		return
 	if info.attack.hitstun_ms <= 0.0 and not info.attack.launch:
 		# 경직 0 인 공격(지원 사격 등): 피해만 적용하고 상태·밀림을 바꾸지 않는다.
 		return
 	end_hitboxes()
-	if info.attack.launch and can_be_launched and not airborne_by_launch and height <= 0.0:
+	if info.attack.launch and can_be_launched and not airborne_by_launch and not falling_by_knockdown and height <= 0.0:
 		# 띄우기: 지상에 있고 아직 띄워지지 않은 대상에게만
 		airborne_by_launch = true
 		vz = info.attack.launch_velocity
@@ -41,9 +46,26 @@ func _on_hit(info: HitInfo) -> void:
 	velocity = Vector2.ZERO
 	change_state(&"hitstun")
 
+## 내려베기: 지상이면 즉시 다운, 공중이면 z 를 옮기지 않고 하강 속도를 최소 500 으로 바꿔 기존 중력·착지 경로로 다운.
+## 이미 down/getup 이면 피해만(타이머 재시작 없음). 추가 수평 밀림 없음.
+func _apply_knockdown(_info: HitInfo) -> void:
+	if state == &"down" or state == &"getup":
+		return
+	end_hitboxes()
+	velocity = Vector2.ZERO
+	knockback_remaining = 0.0
+	if is_airborne():
+		vz = minf(vz, -500.0)
+		airborne_by_launch = true
+		falling_by_knockdown = true
+		if state != &"launched":
+			change_state(&"launched")
+		return
+	change_state(&"down")
+
 ## 새 타격의 밀림으로 교체한다(합산하지 않음). 같은 틱에 여러 타격이 오면 마지막 적용이 남는다.
 func _set_knockback(info: HitInfo) -> void:
-	knockback_remaining = info.attack.knockback if knockback_enabled else 0.0
+	knockback_remaining = info.effective_knockback() if knockback_enabled else 0.0
 	knockback_total = knockback_remaining
 	knockback_ticks = info.attack.knockback_ticks() if knockback_enabled else 0
 	knockback_t = 0
@@ -78,6 +100,7 @@ func _step_launched() -> void:
 
 func _on_landed_from_launch() -> void:
 	airborne_by_launch = false
+	falling_by_knockdown = false
 	change_state(&"down")
 
 func _step_down() -> void:
@@ -93,6 +116,11 @@ func _die() -> void:
 	super()
 	velocity = Vector2.ZERO
 	knockback_remaining = 0.0
+	falling_by_knockdown = false
+
+## 강인병/보스처럼 경직 면역인 적인가(HUD·자동 플레이 판단용)
+func is_stagger_immune() -> bool:
+	return false
 
 ## 하위 클래스에서 공통 상태를 처리한 뒤 true 를 돌려주면 나머지는 건너뛴다.
 func _step_common_reactions() -> bool:

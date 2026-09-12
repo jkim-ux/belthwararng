@@ -1,18 +1,24 @@
 class_name CaptainEnemy
 extends EnemyBase
-## 거점 보스(대장). 초기값 체력 600(초소)·피해 12, 띄우기·다운 면역. 표시명·체력은 거점 던전 데이터로 바꿀 수 있다.
-## 전방 베기(예고 0.6/타격 0.1/회복 0.8초)와 직선 돌진(예고 0.8/이동 타격 0.3/회복 1.0초)을 교대로 쓴다.
+## 거점 보스(대장). 초기값 체력 600(초소)·피해 24(HWR-004), 띄우기·다운 면역. 표시명·체력은 거점 던전 데이터로 바꿀 수 있다.
+## 전방 베기(예고 0.6/타격 0.1/회복 0.8초)와 직선 돌진(예고 0.8/이동 타격 0.3/회복 1.0초).
+## HWR-004 R1 선택: 표적과 발 y 차이 ≤ 8 에서 베기는 |dx| ≤ 110, 돌진은 80 ≤ |dx| ≤ 300 이고 고정 경로가 실제로 닿을 때 후보.
+##   둘 다 가능하면 베기 우선, 직전 완료 패턴이 2회 연속 같으면 다른 후보. 하나만 가능하면 그것. 둘 다 불가면 깊이를 맞추며 접근.
+##   회복 첫 300 ms 에 공격 방향 반대로 60 px 균등 이동(벽에서 중단), 마지막 0.5 초는 이동 없음.
 ## 예고 시작 시 좌우 방향과 바닥 경로를 고정하고, 돌진은 최대 300 px·경기장 경계에서 멈추며 깊이를 추적하지 않는다.
-## 예고/타격/회복 중에는 경직을 받지 않되 피해는 받는다(작은 피격 표시). 대기·접근 중에만 짧은 경직.
+## 피격: 패턴(예고/타격/회복) 중에는 경직·피격 타격 정지 0, 피해·섬광만. 대기·접근 중 평타/A/S/D/F/E 반격에는 120 ms 짧은 경직(비갱신).
+##   Q/W/R(ignores_boss_flinch)은 어느 상태에서도 피해·섬광만(피격 타격 정지 0). 면역은 무적이 아니다.
 ## 상태: idle, approach, telegraph, attack, recover (+ 공통 hitstun/dead). 자세 파괴·페이즈 시스템은 아니다.
 
 var target: BattleActor
 var slash: AttackData
 var charge: AttackData
-var pattern_index: int = 0            ## 0 = 베기, 1 = 돌진 (교대)
 var current_pattern: int = 0
+var recent_patterns: Array[int] = []  ## 최근 완료한 패턴(최대 2)
 var charge_remaining: float = 0.0
 var flinch_ticks: int = 0             ## 피격 표시용(경직 아님)
+var recover_step_done: float = 0.0    ## 회복 첫 구간의 후퇴 누적
+var attacks_started: int = 0
 
 func _init() -> void:
 	team = &"enemy"
@@ -79,10 +85,21 @@ func _pick_target() -> void:
 func in_pattern() -> bool:
 	return state == &"telegraph" or state == &"attack" or state == &"recover"
 
-## 피격: 패턴 중에는 경직 없이 피해만(기본 클래스가 피해와 타격 정지를 이미 적용). 대기·접근 중 짧은 경직.
+func is_stagger_immune() -> bool:
+	return true
+
+## 피격 대상 쪽 타격 정지: 패턴 중 0, Q/W/R 은 어느 상태에서도 0. 그 외(대기·접근)는 공격 값.
+func _victim_hitstop(info: HitInfo) -> int:
+	if in_pattern() or info.attack.ignores_boss_flinch:
+		return 0
+	return info.hitstop_ticks
+
+## 피격: 패턴 중에는 경직 없이 피해만. Q/W/R 은 어느 상태에서도 피해만. 대기·접근 중 짧은 경직(비갱신). 다운/띄우기/Q 무너짐 없음.
 func _on_hit(info: HitInfo) -> void:
 	flinch_ticks = 4
 	if in_pattern():
+		return
+	if info.attack.ignores_boss_flinch:
 		return
 	if info.attack.hitstun_ms <= 0.0:
 		return
@@ -119,13 +136,55 @@ func _step_idle() -> void:
 		if _target_valid():
 			change_state(&"approach")
 
+func _charge_limit(dir: int) -> float:
+	var r: Rect2 = battle.arena_rect()
+	var limit := (r.end.x - half_width - floor_pos.x) if dir > 0 else (floor_pos.x - r.position.x - half_width)
+	return minf(tuning.captain_charge_distance, maxf(0.0, limit))
+
+## 거리 기반 패턴 후보. 돌진은 고정 경로(경계까지 잘린 거리 + 판정 폭)가 실제로 표적에 닿아야 후보다.
+func _pattern_candidates() -> Array[int]:
+	var out: Array[int] = []
+	if not _target_valid():
+		return out
+	var dx := absf(target.floor_pos.x - floor_pos.x)
+	var dy := absf(target.floor_pos.y - floor_pos.y)
+	if dy > 8.0:
+		return out
+	if dx <= tuning.captain_slash_range:
+		out.append(0)
+	if dx >= tuning.captain_charge_min_range and dx <= tuning.captain_charge_max_range:
+		var dir := 1 if target.floor_pos.x >= floor_pos.x else -1
+		if _charge_limit(dir) + charge.reach_forward + target.half_width >= dx:
+			out.append(1)
+	return out
+
+## 베기 우선. 둘 다 가능하고 직전 완료 패턴이 2회 연속 같으면 다른 후보. 하나만 가능하면 반복 제한 없이 사용.
+func _choose_pattern(cands: Array[int]) -> int:
+	if cands.size() == 1:
+		return cands[0]
+	var preferred := 0
+	if recent_patterns.size() >= 2 and recent_patterns[0] == recent_patterns[1]:
+		preferred = 1 - recent_patterns[0]
+	return preferred if cands.has(preferred) else cands[0]
+
 func _step_approach() -> void:
 	_pick_target()
 	if not _target_valid():
 		change_state(&"idle")
 		return
 	facing = 1 if target.floor_pos.x >= floor_pos.x else -1
-	var want_dist := 90.0 if pattern_index == 0 else 220.0
+	var cands := _pattern_candidates()
+	if not cands.is_empty():
+		velocity = Vector2.ZERO
+		current_pattern = _choose_pattern(cands)
+		attacks_started += 1
+		# 예고 시작: 방향·경로 고정. 이후 표적/방향을 다시 고르지 않는다.
+		if current_pattern == 1:
+			charge_remaining = _charge_limit(facing)
+		change_state(&"telegraph")
+		return
+	# 둘 다 불가: 깊이를 맞추며 베기 거리(90)까지 접근한다. 돌진을 위해 물러나지 않는다.
+	var want_dist := 90.0
 	var desired_x := target.floor_pos.x - facing * want_dist
 	var dx := desired_x - floor_pos.x
 	var dy := target.floor_pos.y - floor_pos.y
@@ -141,17 +200,6 @@ func _step_approach() -> void:
 	if absf(stepv.y) > absf(dy):
 		stepv.y = dy
 	floor_pos += stepv
-	if absf(dy) <= 8.0 and absf(dx) <= 14.0:
-		velocity = Vector2.ZERO
-		current_pattern = pattern_index
-		pattern_index = (pattern_index + 1) % 2
-		# 예고 시작: 방향·경로 고정
-		facing = 1 if target.floor_pos.x >= floor_pos.x else -1
-		if current_pattern == 1:
-			var r: Rect2 = battle.arena_rect()
-			var limit := (r.end.x - half_width - floor_pos.x) if facing > 0 else (floor_pos.x - r.position.x - half_width)
-			charge_remaining = minf(tuning.captain_charge_distance, maxf(0.0, limit))
-		change_state(&"telegraph")
 
 func _telegraph_ticks() -> int:
 	return Ticks.from_ms(tuning.captain_slash_telegraph_ms if current_pattern == 0 else tuning.captain_charge_telegraph_ms)
@@ -177,11 +225,24 @@ func _step_attack() -> void:
 		charge_remaining -= stepd
 	if t >= a:
 		end_hitboxes()
+		recent_patterns.push_front(current_pattern)
+		if recent_patterns.size() > 2:
+			recent_patterns.resize(2)
+		recover_step_done = 0.0
 		change_state(&"recover")
 
+## 회복: 첫 300 ms 동안 고정한 공격 방향의 반대로 총 60 px 균등 이동(벽에서 중단, 미소비 거리는 버림). 이후 정지.
 func _step_recover() -> void:
-	approach_velocity(Vector2.ZERO)
-	move_by_velocity()
+	var step_ticks := Ticks.from_ms(tuning.captain_recover_step_ms)
+	if state_ticks <= step_ticks and recover_step_done < tuning.captain_recover_step_px:
+		var per := tuning.captain_recover_step_px / float(maxi(1, step_ticks))
+		var stepd := minf(per, tuning.captain_recover_step_px - recover_step_done)
+		var r: Rect2 = battle.arena_rect()
+		var limit := (floor_pos.x - r.position.x - half_width) if facing > 0 else (r.end.x - half_width - floor_pos.x)
+		stepd = minf(stepd, maxf(0.0, limit))
+		floor_pos.x -= facing * stepd
+		recover_step_done += stepd
+	velocity = Vector2.ZERO
 	if state_ticks >= _recover_ticks():
 		change_state(&"idle")
 

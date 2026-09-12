@@ -9,7 +9,7 @@ var _fail := 0
 var _failures: Array[String] = []
 
 func _initialize() -> void:
-	print("=== HWR-001/HWR-002 R1 자동 검증 시작 (Godot %s) ===" % Engine.get_version_info().string)
+	print("=== HWR-001/HWR-002 R1/HWR-004 R1 전투 자동 검증 시작 (Godot %s) ===" % Engine.get_version_info().string)
 	await process_frame
 	var tests := [
 		"test_tick_quantization",
@@ -37,6 +37,11 @@ func _initialize() -> void:
 		"test_r1_same_tick_last_hit_wins",
 		"test_r1_legacy_profile_keeps_m1_behaviour",
 		"test_r1_profile_switch_rules",
+		# --- HWR-004 R1: 강인병·보스 반응
+		"test_h4_brute_immune_patterns_progress_under_hits",
+		"test_h4_brute_slam_ellipse_and_slot",
+		"test_h4_brute_guard_break_stagger_once",
+		"test_h4_boss_hitstop_policy_selection_and_recover_step",
 	]
 	for t in tests:
 		await _run(t)
@@ -672,3 +677,278 @@ func test_r1_profile_switch_rules(b: Battle) -> void:
 	b.mode = &"campaign"
 	check(not b.set_profile(0) and p.profile_id == &"r1_momentum", "캠페인 모드에서는 프로필 전환 불가")
 	b.mode = &"training"
+
+# ------------------------------------------------------------------ HWR-004 R1: 강인병
+
+## 경직 300ms·피해 dmg 의 일반 타격을 직접 적용한다(테스트용). 밀림은 공격 값(20)을 쓴다.
+func hit_with(target: BattleActor, dmg: int, extra: Dictionary = {}) -> HitInfo:
+	var info := HitInfo.new()
+	info.attack = AttackData.new()
+	info.attack.hitstun_ms = 300.0
+	info.attack.knockback = 20.0
+	for k in extra.keys():
+		info.attack.set(k, extra[k])
+	info.damage = dmg
+	info.hitstop_ticks = 4
+	info.direction = 1
+	target.receive_hit(info)
+	return info
+
+func test_h4_brute_immune_patterns_progress_under_hits(b: Battle) -> void:
+	var p := b.player
+	p.max_hp = 100000
+	p.hp = p.max_hp
+	place(p, 300, 540)
+	var br := b.spawn_brute_enemy(Vector2(900, 540))
+	check(br.max_hp == 180 and br.half_width == 32.0 and br.half_depth == 14.0 and br.body_height == 94.0 and br.is_stagger_immune(), "강인병 체력 180, 피격 범위 32/14/94")
+	# 접근 → 발 간격 x90/y8 안에서 허가 → 예고(방향 고정)
+	var reached := false
+	for i in 400:
+		b.step(PlayerInput.make())
+		if br.state == &"telegraph":
+			reached = true
+			break
+	check(reached and absf(br.floor_pos.x - p.floor_pos.x) <= 90.0 + 0.01 and absf(br.floor_pos.y - p.floor_pos.y) <= 8.0, "접근 후 x≤90/y≤8 에서 예고 시작 (dx %.0f dy %.0f)" % [absf(br.floor_pos.x - p.floor_pos.x), absf(br.floor_pos.y - p.floor_pos.y)])
+	check(br.current_pattern == 0 and br.facing == -1 and b.attack_slot_holders.has(br), "첫 패턴은 전방 2연격, 방향 고정(-1), 공격 허가 보유")
+	# 예고~회복 동안 매 틱 타격(피해 1, 히트스톱 4): 시계가 실제로 진행하고 경직·밀림·타격 정지가 없다
+	var x0 := br.floor_pos.x
+	var telegraph_ticks := 0
+	var max_hitstop := 0
+	var states := {}
+	var hp_before := br.hp
+	var hits := 0
+	while br.state == &"telegraph" and telegraph_ticks < 200:
+		hit_with(br, 1)
+		hits += 1
+		max_hitstop = maxi(max_hitstop, br.hitstop_ticks)
+		b.step(PlayerInput.make())
+		telegraph_ticks += 1
+		states[br.state] = true
+	check(telegraph_ticks == Ticks.from_ms(700.0), "반복 피격 중에도 예고 0.7초(42틱)가 지연 없이 진행 (%d틱)" % telegraph_ticks)
+	check(max_hitstop == 0 and br.hp == hp_before - hits and absf(br.floor_pos.x - x0) < 0.001, "피격 타격 정지 0, HP 는 정확히 감소(%d), 밀림 0" % (hp_before - br.hp))
+	# 타격 구간: 첫 타(hit_index 0) → 15틱 간격 → 두 번째 타(hit_index 1). 매 틱 피격 중에도 두 타격이 만들어진다.
+	var attack_ticks := 0
+	var idx_seen := {}
+	while br.state == &"attack" and attack_ticks < 100:
+		hit_with(br, 1)
+		for hb in br.active_hitboxes:
+			idx_seen[hb.hit_index] = hb.instance_id
+		b.step(PlayerInput.make())
+		attack_ticks += 1
+	check(idx_seen.has(0) and idx_seen.has(1) and idx_seen[0] != idx_seen[1] and br.hits_created == 2, "2연격: hit_index 0/1 의 서로 다른 판정 2개 (%s)" % str(idx_seen.keys()))
+	# 27틱 + 회복 전이 1틱 + 자기 타격이 실제 적중했을 때의 공격자 타격 정지(강공격 4틱 × 2). 피격 쪽 정지는 0.
+	check(attack_ticks == 6 + 15 + 6 + 1 + 2 * Ticks.from_ms(60.0) and br.state == &"recover", "타격 27틱(+공격자 히트스톱 8, 전이 1) 뒤 회복 (%d틱, %s)" % [attack_ticks, br.state])
+	# 플레이어는 2연격 첫 타 24 + 두 번째 타 24 를 받았다(각 1회)
+	check(p.max_hp - p.hp == 48, "2연격 두 타 모두 각 1회 적중, 총 48 (%d)" % (p.max_hp - p.hp))
+	var recover_ticks := 0
+	while br.state == &"recover" and recover_ticks < 200:
+		hit_with(br, 1)
+		b.step(PlayerInput.make())
+		recover_ticks += 1
+	check(recover_ticks == Ticks.from_ms(900.0) and br.state == &"idle" and not b.attack_slot_holders.has(br), "회복 0.9초(54틱) 뒤 대기, 허가 반환 (%d틱)" % recover_ticks)
+	check(not states.has(&"hitstun") and not states.has(&"launched") and not states.has(&"down"), "경직/띄우기/다운 상태에 들어가지 않음")
+	# 띄우기(승월참)·다운 면역: 높이 0 유지
+	var launch_atk := load("res://data/attacks/seungwolcham.tres")
+	var li := HitInfo.new()
+	li.attack = launch_atk
+	li.damage = 30
+	li.hitstop_ticks = 4
+	li.direction = 1
+	br.receive_hit(li)
+	b.step(PlayerInput.make())
+	check(br.height == 0.0 and br.vz == 0.0 and br.state != &"launched", "올려베기에 띄워지지 않음 (높이 %.0f)" % br.height)
+	hit_with(br, 1, {"knockdown": true})
+	b.step(PlayerInput.make())
+	check(br.state != &"down" and br.state != &"launched", "내려베기 다운 면역 (%s)" % br.state)
+	# 다음 패턴은 내려찍기(교대)
+	check(br.next_pattern == 1, "다음 패턴은 주변 내려찍기")
+
+func test_h4_brute_slam_ellipse_and_slot(b: Battle) -> void:
+	var p := b.player
+	p.max_hp = 100000
+	p.hp = p.max_hp
+	place(p, 300, 540)
+	var br := b.spawn_brute_enemy(Vector2(600, 540))
+	br.next_pattern = 1
+	br.state = &"idle"
+	br.state_ticks = 1000
+	# 접근 후 예고가 시작되면 플레이어를 타원 밖(dx 100, dy 30 → 0.83+0.44 > 1)으로 옮긴다
+	for i in 300:
+		b.step(PlayerInput.make())
+		if br.state == &"telegraph":
+			break
+	check(br.state == &"telegraph" and br.current_pattern == 1, "내려찍기 예고 (%s, 패턴 %d)" % [br.state, br.current_pattern])
+	var cx := br.floor_pos.x
+	var cy := br.floor_pos.y
+	place(p, cx - 100.0, cy + 30.0)
+	p.change_state(&"ground")
+	var t := 0
+	while br.state == &"telegraph" and t < 200:
+		b.step(PlayerInput.make())
+		t += 1
+	check(t == Ticks.from_ms(950.0) and br.state == &"attack", "내려찍기 예고 0.95초(57틱) (%d)" % t)
+	check(absf(br.floor_pos.x - cx) < 0.001 and absf(br.floor_pos.y - cy) < 0.001, "예고 중 기준 위치 고정")
+	idle(b, 7)
+	check(p.hp == p.max_hp, "타원 밖(dx 100, dy 30)은 빗나감")
+	check(br.state == &"recover", "타격 0.1초 뒤 회복 (%s)" % br.state)
+	# 두 번째 내려찍기: 타원 안(dx 100, dy 0)이면 적중, 높이 100 이면 빗나감
+	br.next_pattern = 1
+	br.change_state(&"idle")
+	br.state_ticks = 1000
+	b.release_attack_slot(br)
+	place(p, br.floor_pos.x - 60.0, br.floor_pos.y)
+	p.change_state(&"ground")
+	for i in 300:
+		b.step(PlayerInput.make())
+		if br.state == &"telegraph":
+			break
+	check(br.state == &"telegraph" and br.current_pattern == 1, "두 번째 내려찍기 예고")
+	cx = br.floor_pos.x
+	cy = br.floor_pos.y
+	place(p, cx - 100.0, cy, 100.0)
+	p.change_state(&"air")
+	p.vz = 0.0
+	while br.state == &"telegraph":
+		p.height = 100.0
+		p.vz = 0.0
+		b.step(PlayerInput.make())
+	p.height = 100.0
+	p.vz = 0.0
+	b.step(PlayerInput.make())
+	check(p.hp == p.max_hp and br.state == &"attack", "높이 100(피격 z 100~170)은 0~90 범위 밖이라 빗나감")
+	place(p, cx - 100.0, cy)
+	p.change_state(&"ground")
+	b.step(PlayerInput.make())
+	check(p.max_hp - p.hp == 24 and p.state == &"hitstun", "타원 안(dx 100, dy 0)·지상 → 24 피해 (%d)" % (p.max_hp - p.hp))
+	check(not br.slam.parryable and br.combo_hit.parryable, "내려찍기 반격 불가, 2연격 반격 가능")
+
+func test_h4_brute_guard_break_stagger_once(b: Battle) -> void:
+	var p := b.player
+	p.invuln_ticks = 100000
+	place(p, 300, 540)
+	var br := b.spawn_brute_enemy(Vector2(380, 540))
+	br.state = &"idle"
+	br.state_ticks = 1000
+	for i in 200:
+		b.step(PlayerInput.make())
+		if br.state == &"telegraph":
+			break
+	check(br.state == &"telegraph" and b.attack_slot_holders.has(br), "예고 중·허가 보유")
+	idle(b, 10)
+	# Q(guard_break): 현재 공격 취소, 무너짐 1초, 허가 반환
+	hit_with(br, 5, {"guard_break": true})
+	check(br.state == &"stagger" and br.active_hitboxes.is_empty() and not b.attack_slot_holders.has(br), "Q 적중: 자세 무너짐, 판정·허가 정리 (%s)" % br.state)
+	b.step(PlayerInput.make())
+	check(br.stagger_remaining_ticks() == 59 and br.hitstop_ticks == 0, "적용 다음 틱부터 60틱 (남은 %d)" % br.stagger_remaining_ticks())
+	idle(b, 20)
+	var rem := br.stagger_remaining_ticks()
+	hit_with(br, 5, {"guard_break": true})
+	hit_with(br, 5)
+	check(br.stagger_remaining_ticks() == rem and br.staggers == 1, "Q 재적중·다른 타격으로 갱신/연장 없음 (남은 %d)" % br.stagger_remaining_ticks())
+	b.step(PlayerInput.make())
+	check(br.stagger_remaining_ticks() == rem - 1, "피해를 받아도 시간이 멈추지 않음")
+	idle(b, rem - 2)
+	check(br.state == &"stagger" and br.stagger_remaining_ticks() == 1, "무너짐 마지막 틱 (남은 %d)" % br.stagger_remaining_ticks())
+	b.step(PlayerInput.make())
+	check(br.state == &"idle", "60틱 뒤 대기로 복귀 (%s)" % br.state)
+	# 복귀 후: 새 허가와 온전한 예고(중간 타격 상태로 돌아가지 않음)
+	var tele := 0
+	var prev: StringName = br.state
+	for i in 400:
+		b.step(PlayerInput.make())
+		if br.state == &"telegraph":
+			tele += 1
+		elif prev == &"telegraph":
+			break
+		prev = br.state
+	check(br.state == &"attack" and (tele == Ticks.from_ms(700.0) or tele == Ticks.from_ms(950.0)), "복귀 후 온전한 예고 (%d틱, %s)" % [tele, br.state])
+	check(b.attack_slot_holders.size() <= 1, "허가 누수 없음 (%d)" % b.attack_slot_holders.size())
+
+# ------------------------------------------------------------------ HWR-004 R1: 보스 반응·선택·회복 재배치
+
+func test_h4_boss_hitstop_policy_selection_and_recover_step(b: Battle) -> void:
+	var p := b.player
+	p.invuln_ticks = 100000
+	place(p, 400, 540)
+	var boss := b.spawn_captain(Vector2(480, 540))
+	boss.change_state(&"idle")
+	boss.state_ticks = 1000
+	# 대기 중 평타: 짧은 경직 7틱 + 타격 정지 2 (기존)
+	var li := HitInfo.new()
+	li.attack = p.light_attacks[0]
+	li.damage = 20
+	li.hitstop_ticks = 2
+	li.direction = 1
+	boss.receive_hit(li)
+	check(boss.state == &"hitstun" and boss.hitstop_ticks == 2, "대기 중 평타: 짧은 경직·타격 정지 2 (%s, %d)" % [boss.state, boss.hitstop_ticks])
+	idle(b, 15)
+	boss.change_state(&"idle")
+	boss.state_ticks = 1000
+	# 대기 중 Q/W/R(ignores_boss_flinch): 피해만, 경직·타격 정지 0
+	hit_with(boss, 60, {"ignores_boss_flinch": true, "guard_break": true})
+	check(boss.state == &"idle" and boss.hitstop_ticks == 0 and boss.hp == 600 - 20 - 60, "대기 중 Q: 상태 유지·타격 정지 0·피해 60 (%s)" % boss.state)
+	# 패턴 중 연타: 예고 시간이 지연되지 않는다
+	for i in 100:
+		b.step(PlayerInput.make())
+		if boss.state == &"telegraph":
+			break
+	check(boss.state == &"telegraph" and boss.current_pattern == 0, "|dx| 80 → 베기 예고")
+	var t := 0
+	var max_stop := 0
+	while boss.state == &"telegraph" and t < 100:
+		hit_with(boss, 1)
+		max_stop = maxi(max_stop, boss.hitstop_ticks)
+		b.step(PlayerInput.make())
+		t += 1
+	check(t == Ticks.from_ms(600.0) and max_stop == 0, "패턴 중 매 틱 피격에도 예고 36틱 유지, 피격 타격 정지 0 (%d, %d)" % [t, max_stop])
+	# 회복: 첫 18틱 동안 공격 방향 반대로 60px, 이후 정지. 총 회복 48틱 유지.
+	while boss.state == &"attack":
+		b.step(PlayerInput.make())
+	check(boss.state == &"recover", "타격 뒤 회복")
+	var rx := boss.floor_pos.x
+	var f := boss.facing
+	idle(b, 18)
+	check(absf((rx - boss.floor_pos.x) * f - 60.0) < 0.01, "회복 첫 300ms 에 뒤로 60px (%.1f)" % ((rx - boss.floor_pos.x) * f))
+	var rx2 := boss.floor_pos.x
+	var rt := 18
+	while boss.state == &"recover":
+		b.step(PlayerInput.make())
+		rt += 1
+	check(absf(boss.floor_pos.x - rx2) < 0.001 and rt == Ticks.from_ms(800.0), "이후 이동 없음, 회복 총 48틱 (%d)" % rt)
+	check(boss.recent_patterns.size() == 1 and boss.recent_patterns[0] == 0, "완료 패턴 기록")
+	# 벽: 오른쪽 벽에 붙어 왼쪽을 공격하면 후퇴가 벽에서 잘린다
+	var r := b.arena_rect()
+	place(boss, r.end.x - boss.half_width - 10.0, 540)
+	place(p, boss.floor_pos.x - 80.0, 540)
+	boss.change_state(&"approach")
+	for i in 200:
+		b.step(PlayerInput.make())
+		if boss.state == &"recover":
+			break
+	idle(b, 18)
+	check(boss.floor_pos.x <= r.end.x - boss.half_width + 0.01 and boss.floor_pos.x >= r.end.x - boss.half_width - 0.01, "벽에서 후퇴 중단 (x %.0f, 벽 %.0f)" % [boss.floor_pos.x, r.end.x - boss.half_width])
+	# 선택 교착 없음: 여러 위치에서 접근 → 예고에 도달
+	for pos in [Vector2(300, 540), Vector2(300, 700), Vector2(1100, 450), Vector2(r.end.x - 40, 540)]:
+		place(p, pos.x, pos.y)
+		place(boss, 640, 540)
+		boss.recent_patterns.clear()
+		boss.change_state(&"approach")
+		var ok := false
+		for i in 600:
+			b.step(PlayerInput.make())
+			if boss.state == &"telegraph":
+				ok = true
+				break
+		check(ok, "플레이어 %s 에서 접근 → 예고 도달" % str(pos))
+	# 돌진 후보: |dx| 200 같은 깊이 → 베기 불가, 돌진 사용. 돌진 중 연타해도 이동 300 유지
+	place(boss, 400, 540)
+	place(p, 600, 540)
+	boss.recent_patterns.clear()
+	boss.change_state(&"approach")
+	b.step(PlayerInput.make())
+	check(boss.state == &"telegraph" and boss.current_pattern == 1, "|dx| 200 → 돌진 (패턴 %d, %s)" % [boss.current_pattern, boss.state])
+	var sx := boss.floor_pos.x
+	while boss.state != &"recover":
+		hit_with(boss, 1)
+		b.step(PlayerInput.make())
+	check(absf(boss.floor_pos.x - sx - 300.0) < 0.01, "돌진 중 매 틱 피격에도 300px 이동 (%.0f)" % (boss.floor_pos.x - sx))

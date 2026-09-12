@@ -399,7 +399,7 @@ func _step_hitstun() -> void:
 func _on_hit(info: HitInfo) -> void:
 	clear_buffer()
 	hitstun_ticks = Ticks.from_ms(tuning.player_hitstun_ms)
-	knockback_remaining = info.attack.knockback
+	knockback_remaining = info.effective_knockback()
 	knockback_dir = info.direction
 	velocity = Vector2.ZERO
 	if height > 0.0:
@@ -413,6 +413,10 @@ func _die() -> void:
 
 func cooldown_for(sd: SkillData) -> int:
 	return cooldowns.get(sd.id, 0)
+
+## 흘려받기 판정(Battle 의 바깥 판정 계층이 receive_hit 전에 호출). HWR-004 4단계에서 구현한다.
+func try_parry(_info: HitInfo) -> bool:
+	return false
 
 # ------------------------------------------------------------------ 그리기
 ## 몸 기울기와 검 궤적은 그림에만 적용한다. 발 위치, 그림자, y 정렬, 피격 범위, 높이는 바꾸지 않는다.
