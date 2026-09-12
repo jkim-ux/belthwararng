@@ -1,6 +1,6 @@
 class_name CaptainEnemy
 extends EnemyBase
-## 고개 초소 대장. 체력 600, 피해 12, 띄우기·다운 면역.
+## 거점 보스(대장). 초기값 체력 600(초소)·피해 12, 띄우기·다운 면역. 표시명·체력은 거점 던전 데이터로 바꿀 수 있다.
 ## 전방 베기(예고 0.6/타격 0.1/회복 0.8초)와 직선 돌진(예고 0.8/이동 타격 0.3/회복 1.0초)을 교대로 쓴다.
 ## 예고 시작 시 좌우 방향과 바닥 경로를 고정하고, 돌진은 최대 300 px·경기장 경계에서 멈추며 깊이를 추적하지 않는다.
 ## 예고/타격/회복 중에는 경직을 받지 않되 피해는 받는다(작은 피격 표시). 대기·접근 중에만 짧은 경직.
@@ -21,10 +21,12 @@ func _init() -> void:
 	can_be_launched = false
 	knockback_enabled = false
 
-func configure(p_tuning: CombatTuning, p_battle: Node, start: Vector2, p_target: BattleActor) -> void:
+func configure(p_tuning: CombatTuning, p_battle: Node, start: Vector2, p_target: BattleActor, p_display_name: String = "", p_max_hp: int = 0) -> void:
 	setup(p_tuning, p_battle, start)
 	target = p_target
-	max_hp = tuning.captain_max_hp
+	if p_display_name != "":
+		display_name = p_display_name
+	max_hp = p_max_hp if p_max_hp > 0 else tuning.captain_max_hp
 	hp = max_hp
 	half_width = 26.0
 	half_depth = 12.0

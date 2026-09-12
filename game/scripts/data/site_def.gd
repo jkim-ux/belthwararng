@@ -14,7 +14,8 @@ extends Resource
 @export var prerequisite_management: int = 60       ## 선행 마을의 최소 관리도
 
 @export_group("전투")
-@export var waves: Array[EncounterWave] = []
+## 거점의 방 던전(입구 → 일반 전투방 3 → 보스방, 선택 보물방 1). 방별 웨이브·연결·보스·상자는 던전 정의가 갖는다.
+@export var dungeon: DungeonDef
 @export var player_start: Vector2 = Vector2(260, 560)
 
 @export_group("보상")
@@ -34,8 +35,6 @@ extends Resource
 func is_village() -> bool:
 	return kind == &"village"
 
+## 일반 전투방의 적 수 합계(보스·수련장 표적·동료 제외)
 func enemy_count() -> int:
-	var n := 0
-	for w in waves:
-		n += w.enemy_kinds.size()
-	return n
+	return dungeon.enemy_count() if dungeon != null else 0

@@ -1,20 +1,8 @@
-[gd_resource type="Resource" script_class="SiteDef" load_steps=7 format=3]
+[gd_resource type="Resource" script_class="SiteDef" load_steps=5 format=3]
 
 [ext_resource type="Script" path="res://scripts/data/site_def.gd" id="1"]
-[ext_resource type="Script" path="res://scripts/data/encounter_wave.gd" id="2"]
+[ext_resource type="Resource" path="res://data/campaign/dungeons/ch1_store_dungeon.tres" id="2"]
 [ext_resource type="Script" path="res://scripts/data/facility_def.gd" id="3"]
-
-[sub_resource type="Resource" id="wave1"]
-script = ExtResource("2")
-enemy_kinds = [&"melee", &"melee", &"melee"]
-spawn_positions = [Vector2(960, 540), Vector2(1060, 600), Vector2(1140, 660)]
-spawn_delay_ms = 700
-
-[sub_resource type="Resource" id="wave2"]
-script = ExtResource("2")
-enemy_kinds = [&"melee", &"melee", &"melee"]
-spawn_positions = [Vector2(1000, 500), Vector2(1080, 580), Vector2(1160, 640)]
-spawn_delay_ms = 700
 
 [sub_resource type="Resource" id="facility"]
 script = ExtResource("3")
@@ -33,10 +21,10 @@ display_name = "창고 마을"
 chapter_id = &"ch1"
 kind = &"village"
 implemented = true
-description = "보급로의 창고 마을. 근접 적 3명씩 2묶음."
+description = "보급 창고가 있는 마을. 6방 던전: 일반 적 23명(궁수 비중 증가) → 보급대장(550). 선택 보물방."
 prerequisite_site_id = &"ch1_farm"
 prerequisite_management = 60
-waves = [SubResource("wave1"), SubResource("wave2")]
+dungeon = ExtResource("2")
 player_start = Vector2(260, 560)
 first_reward = 100
 repeat_reward = 20

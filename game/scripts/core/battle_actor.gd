@@ -6,6 +6,7 @@ extends Node2D
 
 signal hit_taken(actor: BattleActor, info: HitInfo)
 signal died(actor: BattleActor)
+signal burn_taken(actor: BattleActor, amount: int)
 
 var tuning: CombatTuning
 var battle: Node                       ## Battle (경기장 경계, 타격 처리)
@@ -157,6 +158,18 @@ func receive_hit(info: HitInfo) -> bool:
 
 func _on_hit(_info: HitInfo) -> void:
 	pass
+
+## 지속 피해(바닥 불): 경직·밀림·타격 정지·현재 행동 취소 없이 체력·무적·사망만 처리한다. 적용한 피해를 돌려준다.
+func receive_burn(dmg: int) -> int:
+	if not can_be_hit() or dmg <= 0:
+		return 0
+	var applied := mini(hp, dmg)
+	hp -= applied
+	total_damage_taken += applied
+	burn_taken.emit(self, applied)
+	if hp <= 0 and max_hp > 0:
+		_die()
+	return applied
 
 ## 공격자가 적중을 확인했을 때. 타격 정지는 합산하지 않고 최댓값만 유지한다.
 func on_hit_confirmed(hitstop: int) -> void:

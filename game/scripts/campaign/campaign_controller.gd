@@ -91,9 +91,11 @@ func begin_run(site_id: StringName) -> Dictionary:
 	current_run = {"run_id": run_id, "site_id": String(site_id), "companion_id": (String(comp.id) if comp else ""), "active": true}
 	return {"ok": true, "reason": "", "run_id": run_id}
 
-## 전투 결과 확정. outcome: &"victory" / &"defeat" / &"abandon".
+## 전투 결과 확정. outcome: &"victory" / &"defeat" / &"abandon". victory 는 거점 보스 처치를 뜻한다.
+## extras.chest_bonus: 출정 중 상자로 보류한 군자금. 거점 던전의 chest_currency 로 검증(0 또는 정확히 그 값)해
+## 기본 보상과 함께 같은 후보 상태에 한 번 합산한다. 저장 재시도는 같은 후보를 쓰므로 중복 가산이 없다.
 ## 같은 run_id 로 다시 호출하면 이전 결과를 그대로 돌려준다(보상 중복 없음).
-func resolve_run(run_id: String, outcome: StringName) -> Dictionary:
+func resolve_run(run_id: String, outcome: StringName, extras: Dictionary = {}) -> Dictionary:
 	if _results.has(run_id):
 		return _results[run_id].duplicate(true)
 	if state != null and state.last_committed_run_id == run_id:
@@ -103,7 +105,7 @@ func resolve_run(run_id: String, outcome: StringName) -> Dictionary:
 	current_run.active = false
 	var site := data.site(StringName(current_run.site_id))
 	var result := {"ok": true, "status": "", "reason": "", "run_id": run_id, "outcome": String(outcome), "site_id": current_run.site_id,
-		"reward": 0, "first": false, "liberated_now": false, "chapter_cleared": "", "companion_unlocked": "", "saved": false, "currency": state.currency}
+		"reward": 0, "base_reward": 0, "chest_bonus": 0, "first": false, "liberated_now": false, "chapter_cleared": "", "companion_unlocked": "", "saved": false, "currency": state.currency}
 	if outcome != &"victory":
 		# 패배/포기: 보상 없음, 저장 변경 없음. 이전 점령·시설·자금은 유지.
 		result.status = "defeat" if outcome == &"defeat" else "abandon"
@@ -115,9 +117,30 @@ func resolve_run(run_id: String, outcome: StringName) -> Dictionary:
 	candidate.last_committed_run_id = run_id
 	for k in ["reward", "first", "liberated_now", "chapter_cleared", "companion_unlocked"]:
 		result[k] = applied[k]
+	result.base_reward = int(applied.reward)
+	# 상자 보류 군자금: 던전 정의 값과 일치할 때만 인정한다(임의 금액 거부).
+	var bonus := _validated_chest_bonus(site, extras)
+	if bonus > 0:
+		candidate.currency += bonus
+		result.chest_bonus = bonus
+		result.reward = int(result.base_reward) + bonus
 	_commit("victory", candidate, result)
 	_results[run_id] = result
 	return result.duplicate(true)
+
+func _validated_chest_bonus(site: SiteDef, extras: Dictionary) -> int:
+	if site == null or site.dungeon == null or extras.is_empty():
+		return 0
+	var v: Variant = extras.get("chest_bonus", 0)
+	if typeof(v) != TYPE_INT and typeof(v) != TYPE_FLOAT:
+		return 0
+	var bonus := int(v)
+	if bonus <= 0:
+		return 0
+	if bonus != site.dungeon.chest_currency:
+		push_warning("상자 보류 금액 %d 이 정의값 %d 과 다름 → 정의값으로 제한" % [bonus, site.dungeon.chest_currency])
+		bonus = site.dungeon.chest_currency
+	return bonus
 
 ## 후보 상태를 저장하고 성공하면 메모리 상태로 반영한다. 실패하면 pending 에 보관한다.
 func _commit(kind: String, candidate: CampaignState, result: Dictionary) -> void:

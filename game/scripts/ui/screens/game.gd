@@ -128,15 +128,15 @@ func show_title() -> void:
 	_clear_screen()
 	current_screen = "title"
 	var v := _background("사무라이 점령전")
-	v.add_child(_label("첫 마을에서 시작하는 반격. 챕터 1 '꺼진 봉화' — 농촌 → 창고 마을 → 고개 초소.", 16))
-	v.add_child(_label("HWR-002 R1 · 기획 v0.3", 13, Color(0.7, 0.7, 0.7)))
+	v.add_child(_label("첫 마을에서 시작하는 반격. 챕터 1 '꺼진 봉화' — 농촌 → 창고 마을 → 고개 초소. 거점마다 방 던전(입구 → 전투 3 → 보스, 선택 보물방).", 16))
+	v.add_child(_label("HWR-003 · 기획 v0.4", 13, Color(0.7, 0.7, 0.7)))
 	v.add_child(HSeparator.new())
 	var has_save := campaign.has_save()
 	v.add_child(_button("새 게임", _on_new_game))
 	v.add_child(_button("이어하기" + ("" if has_save else " (저장 없음)"), _on_continue, has_save))
 	v.add_child(_button("수련장 (프로필 비교 · 저장 없음)", start_training))
 	v.add_child(HSeparator.new())
-	v.add_child(_label("조작: 방향키 이동, X 평타, C 점프, Space 회피, A 돌진베기, S 올려베기, Esc 일시정지. 메뉴는 마우스 또는 방향키+Enter.", 13, Color(0.75, 0.75, 0.75)))
+	v.add_child(_label("조작: 방향키 이동, X 평타, C 점프, Space 회피, A 돌진베기, S 올려베기, Enter 문 이동/상자, Esc 일시정지. 메뉴는 마우스 또는 방향키+Enter.", 13, Color(0.75, 0.75, 0.75)))
 	v.add_child(_label("저장 파일: %s" % campaign.store.path, 12, Color(0.55, 0.55, 0.55)))
 	if campaign.last_load_message != "":
 		v.add_child(_label(campaign.last_load_message, 13, Color(1.0, 0.7, 0.6)))
@@ -427,7 +427,10 @@ func _show_pause_overlay() -> void:
 	_pause_overlay = p
 
 func _on_battle_resolved(outcome: StringName, run_id: String) -> void:
-	var result := campaign.resolve_run(run_id, outcome)
+	var extras := {}
+	if battle != null and is_instance_valid(battle):
+		extras = {"chest_bonus": battle.pending_currency, "chest_opened": battle.chest_opened, "run_stats": battle.run_stats.duplicate(true)}
+	var result := campaign.resolve_run(run_id, outcome, extras)
 	last_result = result
 	_show_result(result)
 
@@ -444,12 +447,14 @@ func _show_result(result: Dictionary) -> void:
 	match outcome:
 		"victory":
 			v.add_child(_label("승리 — %s" % site_name, 26, Color(1.0, 0.9, 0.5)))
+			var bonus := int(result.get("chest_bonus", 0))
+			var bonus_text := ("  (기본 %d + 상자 %d)" % [int(result.get("base_reward", result.reward)), bonus]) if bonus > 0 else ""
 			if result.get("liberated_now", false):
-				v.add_child(_label("%s 해방! 최초 보상 군자금 +%d" % [site_name, result.reward], 16, Color(0.8, 1.0, 0.8)))
+				v.add_child(_label("보스 격파 — %s 해방! 최초 보상 군자금 +%d%s" % [site_name, result.reward, bonus_text], 16, Color(0.8, 1.0, 0.8)))
 				if site and site.is_village():
 					v.add_child(_label("관리도 40. 마을 관리에서 정비(40)하면 60이 되어 다음 거점이 열린다.", 14))
 			else:
-				v.add_child(_label("재도전 승리. 군자금 +%d (점령·관리·해금은 그대로)" % result.reward, 16, Color(0.8, 1.0, 0.8)))
+				v.add_child(_label("보스 격파 — 재도전 승리. 군자금 +%d%s (점령·관리·해금은 그대로)" % [result.reward, bonus_text], 16, Color(0.8, 1.0, 0.8)))
 			if String(result.get("chapter_cleared", "")) != "":
 				v.add_child(_label("챕터 클리어! 봉화가 켜졌다.", 18, Color(1.0, 0.8, 0.4)))
 			if String(result.get("companion_unlocked", "")) != "":
@@ -457,10 +462,10 @@ func _show_result(result: Dictionary) -> void:
 				v.add_child(_label("동료 해금: %s" % (c.display_name if c else String(result.companion_unlocked)), 18, Color(0.7, 0.9, 1.0)))
 		"defeat":
 			v.add_child(_label("패배 — %s" % site_name, 26, Color(1.0, 0.5, 0.5)))
-			v.add_child(_label("보상 없음. 이전 점령·시설·자금은 유지된다. 재도전은 새 출정으로.", 15))
+			v.add_child(_label("보상 없음(상자 보류 군자금도 소멸). 이전 점령·시설·자금은 유지된다. 재도전은 새 출정으로.", 15))
 		"abandon":
 			v.add_child(_label("출정 포기 — %s" % site_name, 26, Color(0.9, 0.8, 0.6)))
-			v.add_child(_label("보상 없이 지도로 돌아간다.", 15))
+			v.add_child(_label("보상 없이(상자 보류 군자금 소멸) 지도로 돌아간다.", 15))
 		_:
 			v.add_child(_label("결과: %s" % String(result.get("status", "")), 20))
 	v.add_child(_label("군자금 %d" % int(result.get("currency", campaign.state.currency)), 16, Color(1.0, 0.9, 0.5)))

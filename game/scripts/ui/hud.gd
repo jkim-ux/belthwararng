@@ -2,6 +2,12 @@ class_name Hud
 extends Control
 ## 전투 정보 표시: 체력, 구역, 스킬 8칸과 재사용 시간, 회피 대기, 조작 안내.
 ## 미구현 스킬은 회색으로 "미구현"이라 표시하고 사용 가능한 것처럼 보이지 않게 한다.
+## HWR-003: 우측 상단(여백 16px, 약 240×140)에 방 미니맵을 그린다. 남은 적/웨이브 문구는 상단 중앙으로 옮겼다.
+## 미니맵은 던전의 같은 RoomDef 연결 데이터를 사용한다(격자 칸만 같고 문이 다른 상황이 없음).
+
+const MINIMAP_W := 240.0
+const MINIMAP_H := 140.0
+const MINIMAP_MARGIN := 16.0
 
 var battle: Battle
 
@@ -16,19 +22,52 @@ func _zone_text() -> String:
 	if battle.mode == &"training":
 		return "구역: 수련장 (프로필 비교)"
 	if battle.encounter != null:
-		return "구역: %s" % battle.encounter.display_name
+		var t := "구역: %s" % battle.encounter.display_name
+		if battle.room != null:
+			t += " — %s" % battle.room.display_name
+		return t
 	return "구역: 거점 전투"
 
+## 현재 방의 목표 문구(미니맵과 별도 짧은 텍스트)
+func _objective_text() -> String:
+	if battle.room == null:
+		return ""
+	if battle.transition_ticks > 0:
+		return "이동 중…"
+	if battle.room.is_combat() and battle.doors_locked:
+		var remaining := battle.required_alive_count()
+		var total := battle.total_waves()
+		var idx := mini(battle.wave_index, total)
+		var txt := ""
+		if battle.room.kind == &"boss":
+			txt = "보스전 — 남은 적 %d" % remaining
+		else:
+			txt = "웨이브 %d/%d · 남은 적 %d" % [idx, total, remaining]
+		if not battle.pending_spawns.is_empty():
+			txt += " (출현 중 %d)" % battle.pending_spawns.size()
+		elif remaining == 0 and battle.wave_index < total:
+			txt += " · 다음 웨이브 준비"
+		return txt
+	if battle.room.kind == &"boss":
+		return "보스 처치로 거점 클리어"
+	if battle.room.kind == &"treasure":
+		return "상자를 이미 열었다" if battle.chest_opened else "상자: 생존자 20% 회복 + 군자금 30 보류"
+	if battle.is_room_cleared(battle.room.id):
+		return "정리 완료 — 문이 열려 있다"
+	return "문 앞에서 Enter 로 이동"
+
 func _draw_campaign(f: Font) -> void:
-	# 목표·적 등장 상태
-	var remaining := battle.required_alive_count()
-	var waves_left := battle.remaining_waves()
-	var txt := "남은 적 %d" % remaining
-	if not battle.pending_spawns.is_empty():
-		txt += "  (출현 중 %d)" % battle.pending_spawns.size()
-	if waves_left > 0:
-		txt += "  다음 묶음 %d" % waves_left
-	draw_string(f, Vector2(900, 36), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 0.9, 0.6))
+	# 목표·적 등장 상태(상단 중앙)
+	var txt := _objective_text()
+	if txt != "":
+		draw_string(f, Vector2(700, 36), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 0.9, 0.6))
+	if battle.pending_currency > 0:
+		draw_string(f, Vector2(700, 56), "보류 군자금 %d (보스 승리 시 획득)" % battle.pending_currency, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1, 0.85, 0.5))
+	if battle.room_message_ticks > 0 and battle.room_message != "":
+		var w := f.get_string_size(battle.room_message, HORIZONTAL_ALIGNMENT_LEFT, -1, 18).x
+		draw_rect(Rect2(640 - w * 0.5 - 12, 150, w + 24, 30), Color(0, 0, 0, 0.5))
+		draw_string(f, Vector2(640 - w * 0.5, 172), battle.room_message, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color(1, 0.95, 0.8))
+	_draw_minimap(f)
 	# 동료 체력
 	if battle.companion != null and is_instance_valid(battle.companion):
 		var c := battle.companion
@@ -54,6 +93,100 @@ func _draw_campaign(f: Font) -> void:
 	if not battle.player.alive:
 		draw_string(f, Vector2(480, 200), "쓰러졌다", HORIZONTAL_ALIGNMENT_LEFT, -1, 30, Color(1, 0.5, 0.5))
 
+## 우측 상단 방 미니맵: 현재 방 테두리/점, 미방문 흐림, 방문, 정리 체크, 잠긴 문 자물쇠/막힌 선, 열린 문 연결선, 보스 B, 보물 ?/상자.
+func _draw_minimap(f: Font) -> void:
+	var d := battle.dungeon
+	if d == null or battle.room == null:
+		return
+	var origin := Vector2(size.x - MINIMAP_MARGIN - MINIMAP_W, MINIMAP_MARGIN)
+	draw_rect(Rect2(origin, Vector2(MINIMAP_W, MINIMAP_H)), Color(0, 0, 0, 0.55))
+	draw_rect(Rect2(origin, Vector2(MINIMAP_W, MINIMAP_H)), Color(0.75, 0.62, 0.35, 0.8), false, 1.5)
+	draw_string(f, origin + Vector2(8, 16), "던전 지도", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 0.9, 0.7))
+	# 격자 범위
+	var gmin := Vector2i(1000000, 1000000)
+	var gmax := Vector2i(-1000000, -1000000)
+	for r in d.rooms:
+		gmin = Vector2i(mini(gmin.x, r.grid.x), mini(gmin.y, r.grid.y))
+		gmax = Vector2i(maxi(gmax.x, r.grid.x), maxi(gmax.y, r.grid.y))
+	var cols := gmax.x - gmin.x + 1
+	var rows := gmax.y - gmin.y + 1
+	var cell := 40.0
+	var gap := 6.0
+	var map_w := cols * cell + (cols - 1) * gap
+	var map_h := rows * cell + (rows - 1) * gap
+	var base := origin + Vector2((MINIMAP_W - map_w) * 0.5, 24.0 + (MINIMAP_H - 48.0 - map_h) * 0.5)
+	var centers := {}
+	for r in d.rooms:
+		var g := r.grid - gmin
+		centers[r.id] = base + Vector2(g.x * (cell + gap) + cell * 0.5, g.y * (cell + gap) + cell * 0.5)
+	# 연결선(문): 현재 방이 잠겨 있으면 그 방의 문은 막힌 선 + 자물쇠
+	var drawn := {}
+	for r in d.rooms:
+		for cid in r.connections:
+			var key := "%s|%s" % [mini(hash(r.id), hash(cid)), maxi(hash(r.id), hash(cid))]
+			if drawn.has(key) or not centers.has(cid):
+				continue
+			drawn[key] = true
+			var a: Vector2 = centers[r.id]
+			var b: Vector2 = centers[cid]
+			var locked := battle.doors_locked and (r.id == battle.room.id or cid == battle.room.id)
+			if locked:
+				draw_line(a, b, Color(0.9, 0.25, 0.2, 0.9), 2.0)
+				var m := (a + b) * 0.5
+				draw_line(m + Vector2(-4, -4), m + Vector2(4, 4), Color(1, 0.85, 0.3), 2.0)
+				draw_line(m + Vector2(-4, 4), m + Vector2(4, -4), Color(1, 0.85, 0.3), 2.0)
+			else:
+				draw_line(a, b, Color(0.5, 0.9, 0.55, 0.9), 2.0)
+	# 방 상자
+	for r in d.rooms:
+		var c: Vector2 = centers[r.id]
+		var rect := Rect2(c - Vector2(cell, cell) * 0.5, Vector2(cell, cell))
+		var st := battle.room_state(r.id)
+		var visited: bool = st.visited
+		var cleared: bool = st.cleared
+		var fill := Color(0.35, 0.35, 0.4, 0.5) if not visited else Color(0.55, 0.5, 0.42, 0.95)
+		if r.kind == &"boss":
+			fill = Color(0.5, 0.2, 0.22, 0.6 if not visited else 0.95)
+		elif r.kind == &"treasure":
+			fill = Color(0.5, 0.45, 0.2, 0.6 if not visited else 0.95)
+		draw_rect(rect, fill)
+		var border := Color(0.7, 0.7, 0.7, 0.6) if not visited else Color(0.9, 0.85, 0.7)
+		if r.id == battle.room.id:
+			border = Color(1.0, 0.95, 0.4)
+			draw_rect(rect.grow(2.0), border, false, 3.0)
+			draw_circle(c + Vector2(0, cell * 0.28), 4.0, Color(1.0, 0.95, 0.4))
+		else:
+			draw_rect(rect, border, false, 1.5)
+		var glyph := ""
+		match r.kind:
+			&"entry": glyph = "입"
+			&"boss": glyph = "B"
+			&"treasure": glyph = "?" if not visited else ""
+			&"battle": glyph = str(r.grid.x - gmin.x)
+		if glyph != "":
+			draw_string(f, c + Vector2(-5, 5), glyph, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color.WHITE)
+		if r.kind == &"treasure" and visited:
+			# 상자 아이콘: 닫힘/열림
+			var cr := Rect2(c + Vector2(-9, -4), Vector2(18, 10))
+			draw_rect(cr, Color(0.7, 0.5, 0.25))
+			if battle.chest_opened:
+				draw_rect(Rect2(c + Vector2(-9, -12), Vector2(18, 5)), Color(0.85, 0.65, 0.3))
+			else:
+				draw_rect(Rect2(c + Vector2(-9, -9), Vector2(18, 5)), Color(0.55, 0.38, 0.2))
+		if cleared:
+			# 정리 완료 체크
+			draw_line(c + Vector2(6, -14), c + Vector2(11, -9), Color(0.5, 1.0, 0.5), 2.5)
+			draw_line(c + Vector2(11, -9), c + Vector2(18, -18), Color(0.5, 1.0, 0.5), 2.5)
+	# 현재 방 웨이브/남은 적 짧은 문구(지도와 별도)
+	var line := battle.room.display_name
+	if battle.room.kind == &"battle" and battle.doors_locked:
+		line += "  %d/%d 웨이브 · 남은 적 %d" % [mini(battle.wave_index, battle.total_waves()), battle.total_waves(), battle.required_alive_count()]
+	elif battle.room.kind == &"boss" and battle.doors_locked:
+		line += "  보스 남은 적 %d" % battle.required_alive_count()
+	elif battle.is_room_cleared(battle.room.id):
+		line += "  정리 완료"
+	draw_string(f, origin + Vector2(8, MINIMAP_H - 8), line, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1, 0.95, 0.85))
+
 func _draw() -> void:
 	if battle == null or battle.player == null:
 		return
@@ -74,6 +207,8 @@ func _draw() -> void:
 		"방향키 이동   X 평타   C 점프(공중 평타 1회)   Space 회피",
 		"A 돌진베기   S 올려베기   (D F Q W E R 미구현)",
 	]
+	if battle.mode == &"campaign":
+		help.append("Enter 문 이동 / 상자 열기 (지상에서)   Esc 일시정지")
 	if battle.mode == &"training":
 		help.append("F1 개발 표시   F2 프로필 전환   F5 적 재생성   F6 초기화   F12 스크린샷   Esc 일시정지")
 		var prof := battle.current_profile()

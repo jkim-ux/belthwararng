@@ -1,20 +1,8 @@
-[gd_resource type="Resource" script_class="SiteDef" load_steps=7 format=3]
+[gd_resource type="Resource" script_class="SiteDef" load_steps=5 format=3]
 
 [ext_resource type="Script" path="res://scripts/data/site_def.gd" id="1"]
-[ext_resource type="Script" path="res://scripts/data/encounter_wave.gd" id="2"]
+[ext_resource type="Resource" path="res://data/campaign/dungeons/ch1_farm_dungeon.tres" id="2"]
 [ext_resource type="Script" path="res://scripts/data/facility_def.gd" id="3"]
-
-[sub_resource type="Resource" id="wave1"]
-script = ExtResource("2")
-enemy_kinds = [&"melee", &"melee"]
-spawn_positions = [Vector2(980, 560), Vector2(1080, 630)]
-spawn_delay_ms = 700
-
-[sub_resource type="Resource" id="wave2"]
-script = ExtResource("2")
-enemy_kinds = [&"melee", &"melee"]
-spawn_positions = [Vector2(1040, 520), Vector2(1120, 650)]
-spawn_delay_ms = 700
 
 [sub_resource type="Resource" id="facility"]
 script = ExtResource("3")
@@ -33,10 +21,10 @@ display_name = "징발당한 농촌"
 chapter_id = &"ch1"
 kind = &"village"
 implemented = true
-description = "점령군 징발대가 곡식을 빼앗는 농촌. 근접 적 2명씩 2묶음."
+description = "점령군 징발대가 곡식을 빼앗는 농촌. 6방 던전: 입구 → 전투 1~3 → 징발대장(450). 일반 적 21명, 선택 보물방."
 prerequisite_site_id = &""
 prerequisite_management = 0
-waves = [SubResource("wave1"), SubResource("wave2")]
+dungeon = ExtResource("2")
 player_start = Vector2(260, 560)
 first_reward = 100
 repeat_reward = 20

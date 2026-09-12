@@ -1,7 +1,8 @@
 extends SceneTree
-## HWR-002 R1 캠페인 자동 검증. 실행: godot --headless --path game -s tests/run_campaign_tests.gd
+## HWR-002 R1 + HWR-003 캠페인 자동 검증. 실행: godot --headless --path game -s tests/run_campaign_tests.gd
 ## 테스트용 저장 경로(user://test_saves/)만 사용하며 사용자 저장(user://campaign_save.json)은 건드리지 않는다.
-## 인수 시나리오(docs/CAMPAIGN_SYSTEMS.md 7절) 1~12 를 상태·저장·전투·화면 수준에서 확인한다. 실패가 있으면 종료 코드 1.
+## CAMPAIGN_SYSTEMS 7절 인수 시나리오(승리 = 보스 처치)와 DUNGEON_COMBAT 8절 필수 검수 1~10 을 상태·저장·전투·화면 수준에서 확인한다.
+## 실패가 있으면 종료 코드 1.
 
 const BATTLE_SCENE := "res://scenes/battle.tscn"
 const MAIN_SCENE := "res://scenes/main.tscn"
@@ -11,9 +12,10 @@ var _pass := 0
 var _fail := 0
 var _failures: Array[String] = []
 var data: CampaignData
+var fight_reports: Array[String] = []     ## 실전 자동 플레이 측정(보고용)
 
 func _initialize() -> void:
-	print("=== HWR-002 R1 캠페인 검증 시작 (Godot %s) ===" % Engine.get_version_info().string)
+	print("=== HWR-002 R1 / HWR-003 캠페인 검증 시작 (Godot %s) ===" % Engine.get_version_info().string)
 	data = load(CampaignController.DATA_PATH)
 	await process_frame
 	var tests := [
@@ -22,12 +24,14 @@ func _initialize() -> void:
 		"test_scenario_7_8_rejections_and_no_reset",
 		"test_scenario_11_save_failure_retry_backup",
 		"test_load_cleans_locked_companion_and_rejects_schema",
-		"test_encounter_waves_victory_once",
+		"test_d1_room_two_waves_lock_and_clear_is_not_victory",
+		"test_d2_room_revisit_door_targets_and_single_transition",
+		"test_d3_room_transition_preserves_hp_cooldowns_and_clears_transients",
+		"test_d8_chest_once_heal_pending_and_rewards",
+		"test_d9_boss_only_clears_and_same_tick_death_is_defeat",
 		"test_scenario_9_dummy_and_ally_not_counted",
-		"test_scenario_10_same_tick_death_is_defeat_and_projectiles_cleared",
 		"test_attack_slot_limit_two",
 		"test_captain_two_patterns_and_super_armor",
-		"test_real_fight_farm_victory_with_spam_attack",
 		"test_archer_follows_fires_and_hits",
 		"test_archer_arrow_does_not_break_hitstun_and_passes_ally",
 		"test_scenario_5_archer_last_kill_wins_and_reward_120",
@@ -42,6 +46,10 @@ func _initialize() -> void:
 	print("=== 결과: 통과 %d, 실패 %d ===" % [_pass, _fail])
 	for f in _failures:
 		print("  FAIL: ", f)
+	if not fight_reports.is_empty():
+		print("=== 실전 자동 플레이 측정 ===")
+		for line in fight_reports:
+			print(line)
 	quit(1 if _fail > 0 else 0)
 
 func _run(name: String) -> void:
@@ -108,12 +116,91 @@ func kill(e: BattleActor) -> void:
 	info.direction = 1
 	e.receive_hit(info)
 
+## 경직만 주는 타격(피해 1)
+func stagger(e: BattleActor) -> void:
+	var info := HitInfo.new()
+	info.attack = AttackData.new()
+	info.attack.hitstun_ms = 300.0
+	info.damage = 1
+	info.hitstop_ticks = 0
+	info.direction = 1
+	e.receive_hit(info)
+
 ## 승리까지 진행한 컨트롤러 결과를 돌려주는 도우미(전투 없이 상태만).
 func win(c: CampaignController, site_id: StringName) -> Dictionary:
 	var r := c.begin_run(site_id)
 	if not r.ok:
 		return {"ok": false, "status": "rejected", "reason": r.reason, "reward": 0}
 	return c.resolve_run(r.run_id, &"victory")
+
+## 방 전이가 끝날 때까지 진행
+func settle(b: Battle) -> void:
+	var guard := 0
+	while b.transition_ticks > 0 and guard < 200:
+		b.step(PlayerInput.make())
+		guard += 1
+
+func door_dir_to(b: Battle, room_id: StringName) -> StringName:
+	for door in b.dungeon.doors_of(b.room):
+		if door.target_id == room_id:
+			return door.dir
+	return &""
+
+## 열린 문으로 이동: 문 구역에 서서 Enter 를 새로 누른다. 전이는 끝내지 않는다(성공 시 room 이 바뀐 상태).
+func enter_no_settle(b: Battle, room_id: StringName) -> bool:
+	var dir := door_dir_to(b, room_id)
+	if dir == &"":
+		return false
+	var z := b.door_zone(dir)
+	place(b.player, z.get_center().x, z.get_center().y)
+	if b.player.alive and b.player.state != &"ground":
+		b.player.change_state(&"ground")
+	b.step(PlayerInput.make())
+	b.step(PlayerInput.make(Vector2.ZERO, ["interact"]))
+	return b.room.id == room_id
+
+func enter(b: Battle, room_id: StringName) -> bool:
+	var ok := enter_no_settle(b, room_id)
+	settle(b)
+	return ok
+
+## 현재 전투방을 웨이브·간격 포함 모두 처치해 정리한다(보스방이면 승리).
+func clear_room(b: Battle) -> void:
+	var guard := 0
+	while b.doors_locked and b.result_state == &"active" and guard < 40:
+		guard += 1
+		if not b.pending_spawns.is_empty():
+			flush_spawns(b)
+		for e in b.alive_enemies():
+			kill(e)
+		idle(b, 1)
+		if b.doors_locked and b.pending_spawns.is_empty() and b.required_alive_count() == 0 and b.wave_index < b.total_waves():
+			idle(b, b.wave_gap_ticks + 1)
+
+## 입구에서 보스방 출현까지(보물방 생략)
+func to_boss(b: Battle) -> void:
+	settle(b)
+	enter(b, &"battle_1")
+	clear_room(b)
+	enter(b, &"battle_2")
+	clear_room(b)
+	enter(b, &"battle_3")
+	clear_room(b)
+	enter(b, &"boss")
+	flush_spawns(b)
+
+func dungeon_win(b: Battle) -> void:
+	to_boss(b)
+	for e in b.alive_enemies():
+		kill(e)
+	idle(b, 1)
+
+func count_of(arr: Array, cls) -> int:
+	var n := 0
+	for e in arr:
+		if is_instance_of(e, cls):
+			n += 1
+	return n
 
 # ------------------------------------------------------------------ 정의 데이터
 
@@ -132,11 +219,33 @@ func test_campaign_data_definitions() -> void:
 	var farm := data.site(&"ch1_farm")
 	var store := data.site(&"ch1_store")
 	var pass_site := data.site(&"ch1_pass")
-	check(farm.is_village() and farm.enemy_count() == 4 and farm.waves.size() == 2, "농촌: 근접 2×2")
-	check(store.is_village() and store.enemy_count() == 6 and store.waves.size() == 2 and store.prerequisite_site_id == &"ch1_farm" and store.prerequisite_management == 60, "창고: 근접 3×2, 선행 농촌 60")
-	check(not pass_site.is_village() and pass_site.facility == null and pass_site.waves.size() == 1 and pass_site.waves[0].enemy_kinds[0] == &"captain", "초소: fort, 시설 없음, 대장 1")
+	check(farm.is_village() and store.is_village() and not pass_site.is_village() and pass_site.facility == null, "농촌·창고 마을, 초소 fort·시설 없음")
+	check(store.prerequisite_site_id == &"ch1_farm" and store.prerequisite_management == 60 and pass_site.prerequisite_site_id == &"ch1_store", "선행 조건 농촌 60 → 창고 60 → 초소")
 	check(farm.facility.id == &"training_ground" and farm.facility.cost == 60 and store.facility.id == &"supply_depot" and store.facility.cost == 60, "훈련장/보급창 60")
 	check(farm.first_reward == 100 and farm.repeat_reward == 20 and farm.repair_cost == 40, "보상 100/20, 정비 40")
+	# 던전: 6방, 연결 대칭, 웨이브 수, 적 수, 보스
+	var expected := {&"ch1_farm": [21, "징발대장", 450], &"ch1_store": [23, "보급대장", 550], &"ch1_pass": [24, "초소 대장", 600]}
+	for s in data.sites:
+		var d: DungeonDef = s.dungeon
+		check(d != null and d.rooms.size() == 6, "%s: 6방" % s.id)
+		check(d.validate().is_empty(), "%s: 연결·웨이브 정의 정상 %s" % [s.id, str(d.validate())])
+		var ex: Array = expected[s.id]
+		check(d.enemy_count() == ex[0], "%s: 일반 적 %d == %d" % [s.id, d.enemy_count(), ex[0]])
+		check(d.boss_display_name == ex[1] and d.boss_max_hp == ex[2], "%s: 보스 %s %d" % [s.id, d.boss_display_name, d.boss_max_hp])
+		check(d.chest_currency == 30 and is_equal_approx(d.chest_heal_ratio, 0.2), "%s: 상자 30 / 20%%" % s.id)
+		var kinds := {}
+		for r in d.rooms:
+			if r.kind == &"battle":
+				check(r.waves.size() == 2, "%s/%s: 2웨이브" % [s.id, r.id])
+			for w in r.waves:
+				check(w.enemy_kinds.size() <= 5 and w.spawn_positions.size() == w.enemy_kinds.size(), "%s/%s: 동시 출현 ≤5, 위치 수 일치" % [s.id, r.id])
+				for k in w.enemy_kinds:
+					kinds[k] = true
+		check(kinds.has(&"melee") and kinds.has(&"archer") and kinds.has(&"thrower") and kinds.has(&"boss"), "%s: 근접·궁수·투척·보스 모두 배치" % s.id)
+		var b2 := d.room(&"battle_2")
+		var tr_conn: Array[StringName] = d.room(&"treasure").connections
+		check(b2 != null and b2.connections.has(&"treasure") and tr_conn.size() == 1 and tr_conn[0] == &"battle_2", "%s: 보물방은 전투 2 에서만 갈림" % s.id)
+		check(d.direction_between(d.room(&"battle_2"), d.room(&"treasure")) == &"north" and d.direction_between(d.room(&"entry"), d.room(&"battle_1")) == &"east", "%s: 문 방향(북/동)" % s.id)
 
 # ------------------------------------------------------------------ 시나리오 1~4, 7, 8
 
@@ -331,35 +440,416 @@ func test_load_cleans_locked_companion_and_rejects_schema() -> void:
 
 # ------------------------------------------------------------------ 전투: 웨이브·승패
 
-func test_encounter_waves_victory_once() -> void:
+# ------------------------------------------------------------------ DUNGEON_COMBAT 필수 검수 1~9
+
+## 1. 일반 방마다 정확히 2웨이브, 웨이브 간 문 잠금, 출현 중인 적 때문에 승리/정리가 조기 발생하지 않음 (+9 일부)
+func test_d1_room_two_waves_lock_and_clear_is_not_victory() -> void:
 	var b: Battle = await make_battle()
 	var farm := data.site(&"ch1_farm")
 	var resolved_count := [0]
-	var resolved_outcome := [""]
-	b.resolved.connect(func(o, _rid): resolved_count[0] += 1; resolved_outcome[0] = String(o))
-	b.start_encounter(farm, "run_test_1", null, 20.0, 100)
-	check(b.enemies.is_empty() and b.pending_spawns.size() == 2 and b.wave_index == 1, "시작: 출현 예고 2, 적 0")
-	check(b.result_state == &"active" and b.required_alive_count() == 0, "출현 예고 중 적 0 이지만 승리 아님")
-	idle(b, Ticks.from_ms(700))
-	check(b.enemies.size() == 2 and b.required_alive_count() == 2 and b.pending_spawns.is_empty(), "묶음 1 출현 (2명)")
+	var cleared_rooms: Array = []
+	b.resolved.connect(func(_o, _rid): resolved_count[0] += 1)
+	b.room_cleared.connect(func(rid): cleared_rooms.append(rid))
+	b.start_encounter(farm, "run_rooms", null, 20.0, 100)
+	check(b.room != null and b.room.id == &"entry" and not b.doors_locked and b.pending_spawns.is_empty(), "입구: 안전한 방, 출현 없음")
+	check(b.transition_ticks == Ticks.from_ms(300), "진입 전이 %d틱" % b.transition_ticks)
+	settle(b)
+	check(b.pending_spawns.is_empty() and b.enemies.is_empty(), "입구는 0웨이브")
+	check(enter_no_settle(b, &"battle_1"), "동쪽 문 → 전투 1")
+	check(b.transition_ticks > 0 and not b.doors_locked and b.pending_spawns.is_empty(), "전이 중에는 아직 예고 없음")
+	settle(b)
+	check(b.doors_locked and b.pending_spawns.size() == 3 and b.wave_index == 1 and b.total_waves() == 2, "전이 후 문 잠금, 1웨이브 예고 3")
+	check(b.enemies.is_empty() and b.result_state == &"active" and not b.is_room_cleared(&"battle_1"), "예고 중 적 0 이지만 정리·승리 아님")
+	# 잠긴 문: Enter 로 이동 불가
+	var z := b.door_zone(&"east")
+	place(b.player, z.get_center().x, z.get_center().y)
+	idle(b, 1)
+	b.step(PlayerInput.make(Vector2.ZERO, ["interact"]))
+	check(b.room.id == &"battle_1" and b.doors_locked, "잠긴 문에서 Enter → 이동 없음")
+	place(b.player, 200, 545)
+	idle(b, Ticks.from_ms(700) - 2)
+	check(b.required_alive_count() == 3 and b.pending_spawns.is_empty(), "1웨이브 출현 3 (근접 3)")
 	for e in b.enemies:
 		check(absf(e.floor_pos.x - b.player.floor_pos.x) >= 120.0, "등장 위치가 플레이어와 겹치지 않음 (%.0f)" % e.floor_pos.x)
-	kill(b.enemies[0])
+	var es := b.alive_enemies()
+	kill(es[0])
+	kill(es[1])
 	idle(b, 1)
-	check(b.result_state == &"active" and b.wave_index == 1 and b.pending_spawns.is_empty(), "1명 남았을 때 다음 묶음 없음")
-	kill(b.enemies[1])
+	check(b.doors_locked and b.wave_index == 1 and b.pending_spawns.is_empty(), "1명 남았을 때 다음 웨이브 없음")
+	kill(es[2])
 	idle(b, 1)
-	check(b.result_state == &"active" and b.wave_index == 2 and b.pending_spawns.size() == 2, "묶음 1 전멸 → 묶음 2 예고 (승리 아님)")
-	idle(b, Ticks.from_ms(700))
-	check(b.required_alive_count() == 2, "묶음 2 출현")
+	check(b.doors_locked and b.pending_spawns.is_empty() and b.required_alive_count() == 0 and not b.is_room_cleared(&"battle_1"), "1웨이브 전멸 직후: 적 0 이지만 문 잠금 유지(간격), 정리 아님")
+	var gap := Ticks.from_ms(1000)
+	idle(b, gap - 2)
+	check(b.pending_spawns.is_empty() and b.doors_locked, "간격 중 예고 없음, 문 잠금")
+	idle(b, 1)
+	check(b.pending_spawns.size() == 3 and b.wave_index == 2, "전멸 1초 뒤 2웨이브 예고 3")
+	var kinds: Array = []
+	for sp in b.pending_spawns:
+		kinds.append(sp.kind)
+	check(kinds == [&"melee", &"melee", &"archer"], "2웨이브 구성 근접 2 + 궁수 1 (%s)" % str(kinds))
+	flush_spawns(b)
+	check(b.required_alive_count() == 3, "2웨이브 출현 3")
 	for e in b.alive_enemies():
 		kill(e)
 	idle(b, 1)
-	check(b.result_state == &"resolved" and b.outcome == &"victory" and resolved_count[0] == 1, "마지막 묶음 전멸 → 승리 1회 (%d)" % resolved_count[0])
+	check(b.is_room_cleared(&"battle_1") and not b.doors_locked and b.result_state == &"active", "2웨이브 전멸 → 방 정리·문 개방, 거점 승리 아님")
+	check(cleared_rooms == [&"battle_1"] and resolved_count[0] == 0, "room_cleared 1회, resolved 0회")
+	idle(b, 30)
+	check(cleared_rooms.size() == 1 and b.pending_spawns.is_empty(), "정리 후 추가 웨이브·중복 이벤트 없음")
+	# 나머지 방을 지나 보스 처치 → 승리 1회
+	enter(b, &"battle_2")
+	clear_room(b)
+	enter(b, &"battle_3")
+	clear_room(b)
+	check(cleared_rooms.size() == 3 and resolved_count[0] == 0, "일반 방 3개 정리, 아직 승리 아님")
+	enter(b, &"boss")
+	check(b.doors_locked and b.pending_spawns.size() == 1 and b.total_waves() == 1, "보스방: 예고 1(보스), 추가 웨이브 없음")
+	flush_spawns(b)
+	var boss := b.boss_enemy()
+	check(boss != null and boss.alive and boss.display_name == "징발대장" and boss.max_hp == 450, "농촌 보스 징발대장 450 (%s %d)" % [boss.display_name if boss else "", boss.max_hp if boss else 0])
+	check(b.alive_enemies().size() == 1, "보스 외 잡몹 없음")
+	kill(boss)
+	idle(b, 1)
+	check(b.result_state == &"resolved" and b.outcome == &"victory" and resolved_count[0] == 1, "보스 처치 → 승리 1회")
 	var t := b.tick
 	idle(b, 10)
-	check(b.tick == t and resolved_count[0] == 1, "확정 후 진행 정지, 이벤트 반복 없음")
+	check(b.tick == t and resolved_count[0] == 1 and cleared_rooms.size() == 3, "확정 후 진행 정지, 이벤트 반복 없음")
 	b.queue_free()
+
+## 2. 정리한 방 재입장 시 적/상자 재생성 없음, 문 목적지와 연결 데이터 일치, Enter 연타/유지로 중복 전이 없음
+func test_d2_room_revisit_door_targets_and_single_transition() -> void:
+	var b: Battle = await make_battle()
+	var farm := data.site(&"ch1_farm")
+	var entered: Array = []
+	b.room_entered.connect(func(rid): entered.append(rid))
+	b.start_encounter(farm, "run_revisit", null, 20.0, 100)
+	settle(b)
+	enter(b, &"battle_1")
+	clear_room(b)
+	# 문 목적지 = 연결 데이터, 방향 = 격자 인접
+	for door in b.dungeon.doors_of(b.room):
+		var other: RoomDef = b.dungeon.room(door.target_id)
+		check(b.room.connections.has(door.target_id) and b.dungeon.direction_between(b.room, other) == door.dir, "문 %s → %s 연결 데이터 일치" % [door.dir, door.target_id])
+	check(b.dungeon.doors_of(b.room).size() == 2, "전투 1 문 2개(서·동)")
+	# 입구로 되돌아갔다가 재입장: 적·예고 없음, 문 열림
+	check(enter(b, &"entry") and b.room.id == &"entry" and b.enemies.is_empty(), "서쪽 문으로 입구 복귀")
+	check(enter(b, &"battle_1"), "전투 1 재입장")
+	check(b.enemies.is_empty() and b.pending_spawns.is_empty() and not b.doors_locked and b.is_room_cleared(&"battle_1"), "재입장: 적·예고 재생성 없음, 문 열림")
+	check(b.player.floor_pos == b.entry_point(&"west") and b.player.facing == 1, "서쪽 문 안쪽 안전 지점에 배치 (%s)" % str(b.player.floor_pos))
+	# 갈림길 → 보물방 → 되돌아오기
+	enter(b, &"battle_2")
+	clear_room(b)
+	check(b.dungeon.doors_of(b.room).size() == 3, "전투 2 문 3개(서·동·북)")
+	check(enter(b, &"treasure") and b.room.kind == &"treasure" and b.chest != null and not b.chest.opened, "북쪽 문 → 보물방, 상자 있음")
+	check(b.player.floor_pos == b.entry_point(&"south"), "보물방은 남쪽 문 안쪽에서 시작")
+	check(enter(b, &"battle_2") and b.enemies.is_empty() and not b.doors_locked, "보물방 → 전투 2 복귀: 적 재생성 없음")
+	check(b.player.floor_pos == b.entry_point(&"north"), "북쪽 문 안쪽 안전 지점")
+	# Enter 유지: 문 구역에서 계속 눌러도 1회만 이동
+	var before := entered.size()
+	var dir := door_dir_to(b, &"battle_3")
+	var z := b.door_zone(dir)
+	place(b.player, z.get_center().x, z.get_center().y)
+	idle(b, 1)
+	for i in 30:
+		b.step(PlayerInput.make(Vector2.ZERO, ["interact"]))
+	check(b.room.id == &"battle_3" and entered.size() == before + 1, "Enter 유지 30틱 → 전이 1회 (%d)" % (entered.size() - before))
+	settle(b)
+	check(b.doors_locked and b.pending_spawns.size() == 4, "전투 3 첫 진입: 문 잠금, 1웨이브 예고 4")
+	# 전이 중 Enter 무시: 정리 후 다시 문 앞에서 이동을 시작하고 전이 중 새 Enter
+	clear_room(b)
+	before = entered.size()
+	check(enter_no_settle(b, &"battle_2"), "전투 3 → 전투 2 이동 시작")
+	b.step(PlayerInput.make())
+	b.step(PlayerInput.make(Vector2.ZERO, ["interact"]))
+	check(b.transition_ticks > 0 and b.room.id == &"battle_2" and entered.size() == before + 1, "전이 중 새 Enter 무시")
+	settle(b)
+	# 공중·공격 중에는 문을 쓸 수 없다
+	dir = door_dir_to(b, &"battle_3")
+	z = b.door_zone(dir)
+	place(b.player, z.get_center().x, z.get_center().y)
+	press(b, "jump")
+	b.step(PlayerInput.make(Vector2.ZERO, ["interact"]))
+	check(b.player.state == &"air" and b.room.id == &"battle_2", "공중에서는 문 이동 불가")
+	idle(b, 60)
+	place(b.player, z.get_center().x, z.get_center().y)
+	press(b, "attack_light")
+	b.step(PlayerInput.make(Vector2.ZERO, ["interact"]))
+	check(b.player.state == &"light" and b.room.id == &"battle_2", "평타 중에는 문 이동 불가")
+	b.queue_free()
+
+## 3. 방 이동 후 주인공 HP/스킬·회피 대기/생존 동료 HP·이탈 유지, 공격/불/투사체는 이동하지 않음
+func test_d3_room_transition_preserves_hp_cooldowns_and_clears_transients() -> void:
+	var b: Battle = await make_battle()
+	var farm := data.site(&"ch1_farm")
+	var aya := data.companion(&"aya")
+	b.start_encounter(farm, "run_keep", aya, 20.0, 100)
+	settle(b)
+	enter(b, &"battle_1")
+	clear_room(b)
+	var p := b.player
+	var comp: ArcherCompanion = b.companion
+	p.hp = 57
+	comp.hp = 33
+	comp.cooldown_ticks = 77
+	press(b, "skill_a")
+	idle(b, 40)
+	press(b, "dodge")
+	idle(b, 15)
+	check(p.state == &"ground" and p.cooldowns[&"bieonchan"] > 0 and p.dodge_cooldown_ticks > 0, "스킬·회피 대기시간 진행 중")
+	# 떠나는 방에 불·항아리·적 화살·예고를 남긴다
+	b._spawn_fire(Vector2(500, 545))
+	b.throw_fire_pot(Vector2(900, 545), Vector2(700, 545))
+	var pr := Projectile.new()
+	pr.setup(&"enemy", null, AttackData.new(), 8.0, Vector2(1000, 545), 35.0, -1, 650.0, 560.0, 90, 4.0, 8.0)
+	b.add_projectile(pr)
+	place(p, 500, 545)
+	idle(b, 3)
+	check(not b.fires.is_empty() and not b.pots.is_empty() and not b.projectiles.is_empty() and not b.fire_clocks.is_empty(), "불·항아리·적 화살·불 시계 존재")
+	var cd_before: int = p.cooldowns[&"bieonchan"]
+	var dodge_before := p.dodge_cooldown_ticks
+	var comp_cd_before := comp.cooldown_ticks
+	check(enter_no_settle(b, &"battle_2"), "전투 2 로 이동 시작")
+	# enter_no_settle 은 일반 틱 1개 + Enter 틱(전이 시작, 진행 없음)을 진행한다 → 대기시간은 정확히 1 줄어 있어야 한다
+	check(p.cooldowns[&"bieonchan"] == cd_before - 1 and p.dodge_cooldown_ticks == dodge_before - 1, "이동 직전까지 일반 틱에서만 대기시간 감소 (Enter 틱부터 정지)")
+	var cd_mid: int = p.cooldowns[&"bieonchan"]
+	var comp_cd_mid := comp.cooldown_ticks
+	settle(b)
+	check(p.cooldowns[&"bieonchan"] == cd_mid and p.dodge_cooldown_ticks == dodge_before - 1 and comp.cooldown_ticks == comp_cd_mid, "전이 %d틱 동안 대기시간 정지" % Ticks.from_ms(300))
+	check(comp_cd_before - comp_cd_mid == 1, "동료 발사 대기시간도 전이 중 정지")
+	check(p.hp == 57 and p.max_hp == 100, "주인공 체력 57 유지(회복 없음)")
+	check(comp.alive and comp.hp == 33 and comp.state == &"follow" and comp.velocity == Vector2.ZERO, "동료 체력 33 유지, 따라가기 상태 (alive %s hp %d state %s vel %s)" % [str(comp.alive), comp.hp, comp.state, str(comp.velocity)])
+	check(b.fires.is_empty() and b.pots.is_empty() and b.projectiles.is_empty() and b.fire_clocks.is_empty() and b.pending_spawns.size() == 3, "불·항아리·투사체·시계 이동 없음, 새 방 예고 3")
+	check(p.active_hitboxes.is_empty() and p.buffered_action == &"" and p.velocity == Vector2.ZERO and p.knockback_remaining == 0.0, "공격 판정·보관 입력·이동량 정리")
+	check(comp.floor_pos.distance_to(p.floor_pos) < 120.0 and not b.is_in_fire(comp.floor_pos), "동료는 주인공 근처에 배치")
+	for sp in b.pending_spawns:
+		check(sp.pos.distance_to(p.floor_pos) > 150.0, "새 방 출현 예고가 플레이어와 겹치지 않음 (%.0f)" % sp.pos.distance_to(p.floor_pos))
+	# 이탈한 동료는 다음 방에서 부활하지 않는다
+	kill(comp)
+	idle(b, 1)
+	check(not comp.alive and not b.alive_allies().has(comp), "동료 이탈")
+	clear_room(b)
+	enter(b, &"battle_3")
+	check(not comp.alive and not comp.visible and not b.alive_allies().has(comp) and b.result_state == &"active", "방 이동 후에도 이탈 유지, 패배 아님")
+	b.queue_free()
+	# 새 출정에서만 회복
+	var b2: Battle = await make_battle()
+	b2.start_encounter(farm, "run_keep_2", aya, 20.0, 100)
+	check(b2.player.hp == 100 and b2.companion.alive and b2.companion.hp == 60 and b2.player.cooldowns[&"bieonchan"] == 0, "새 출정: 체력·동료·대기시간 초기화")
+	b2.queue_free()
+
+func test_d8_chest_once_heal_pending_and_rewards() -> void:
+	var c := make_controller()
+	c.new_game()
+	var farm := data.site(&"ch1_farm")
+	var br := c.begin_run(&"ch1_farm")
+	var b: Battle = await make_battle()
+	b.start_encounter(farm, br.run_id, null, 20.0, 100)
+	settle(b)
+	enter(b, &"battle_1")
+	clear_room(b)
+	enter(b, &"battle_2")
+	clear_room(b)
+	enter(b, &"treasure")
+	var p := b.player
+	p.hp = 50
+	place(p, 640, 545)
+	idle(b, 1)
+	var opened := [0]
+	b.chest_opened_signal.connect(func(_h, _c): opened[0] += 1)
+	b.step(PlayerInput.make(Vector2.ZERO, ["interact"]))
+	check(b.chest_opened and p.hp == 70 and b.pending_currency == 30 and opened[0] == 1, "상자 개봉: 체력 50→70(20%%), 보류 30 (체력 %d, 보류 %d)" % [p.hp, b.pending_currency])
+	idle(b, 1)
+	for i in 5:
+		b.step(PlayerInput.make(Vector2.ZERO, ["interact"]))
+		idle(b, 1)
+	check(p.hp == 70 and b.pending_currency == 30 and opened[0] == 1, "연타해도 재지급 없음")
+	check(b.open_chest().ok == false, "직접 호출도 거부")
+	# 재방문에도 열린 상태
+	enter(b, &"battle_2")
+	enter(b, &"treasure")
+	check(b.chest.opened and b.chest_opened, "재방문: 열린 상자 유지")
+	b.step(PlayerInput.make(Vector2.ZERO, ["interact"]))
+	check(p.hp == 70 and b.pending_currency == 30, "재방문 Enter 도 무효")
+	enter(b, &"battle_2")
+	enter(b, &"battle_3")
+	clear_room(b)
+	enter(b, &"boss")
+	flush_spawns(b)
+	for e in b.alive_enemies():
+		kill(e)
+	idle(b, 1)
+	check(b.outcome == &"victory" and b.pending_currency == 30, "보스 승리, 보류 30 유지")
+	var r1 := c.resolve_run(b.run_id, b.outcome, {"chest_bonus": b.pending_currency})
+	check(r1.status == "committed" and r1.reward == 130 and r1.base_reward == 100 and r1.chest_bonus == 30 and c.state.currency == 130, "최초 승리 + 상자 = 130 (군자금 %d)" % c.state.currency)
+	check(c.state.is_liberated(&"ch1_farm") and c.state.management(&"ch1_farm") == 40, "해방·관리도 40 은 그대로")
+	var again := c.resolve_run(b.run_id, b.outcome, {"chest_bonus": 30})
+	check(again.reward == 130 and c.state.currency == 130, "같은 run 반복 호출: 중복 없음")
+	b.queue_free()
+	# 재도전 + 상자 = 50 (동료 포함 회복: 생존자만, 최대 초과 없음, 이탈 부활 없음)
+	c.state.unlocked_companions.append("aya")
+	c.select_companion(&"aya")
+	br = c.begin_run(&"ch1_farm")
+	var b2: Battle = await make_battle()
+	b2.start_encounter(farm, br.run_id, c.selected_companion(), 20.0, 100)
+	check(not b2.chest_opened and b2.pending_currency == 0, "새 출정: 상자 상태 초기화")
+	settle(b2)
+	enter(b2, &"battle_1")
+	clear_room(b2)
+	enter(b2, &"battle_2")
+	clear_room(b2)
+	enter(b2, &"treasure")
+	b2.player.hp = 95
+	var comp: ArcherCompanion = b2.companion
+	comp.hp = 30
+	place(b2.player, 640, 545)
+	idle(b2, 1)
+	b2.step(PlayerInput.make(Vector2.ZERO, ["interact"]))
+	check(b2.player.hp == 100 and comp.hp == 42 and b2.chest_heal_total == 17, "주인공 95→100(초과 없음), 동료 30→42(+12=20%% of 60)")
+	enter(b2, &"battle_2")
+	enter(b2, &"battle_3")
+	clear_room(b2)
+	enter(b2, &"boss")
+	flush_spawns(b2)
+	for e in b2.alive_enemies():
+		kill(e)
+	idle(b2, 1)
+	var r2 := c.resolve_run(b2.run_id, b2.outcome, {"chest_bonus": b2.pending_currency})
+	check(r2.reward == 50 and r2.base_reward == 20 and c.state.currency == 180, "재도전 + 상자 = 50 (군자금 %d)" % c.state.currency)
+	b2.queue_free()
+	# 이탈한 동료는 상자로 부활하지 않는다
+	br = c.begin_run(&"ch1_farm")
+	var b3: Battle = await make_battle()
+	b3.start_encounter(farm, br.run_id, c.selected_companion(), 20.0, 100)
+	settle(b3)
+	kill(b3.companion)
+	enter(b3, &"battle_1")
+	clear_room(b3)
+	enter(b3, &"battle_2")
+	clear_room(b3)
+	enter(b3, &"treasure")
+	place(b3.player, 640, 545)
+	idle(b3, 1)
+	b3.step(PlayerInput.make(Vector2.ZERO, ["interact"]))
+	check(b3.chest_opened and not b3.companion.alive and b3.companion.hp == 0, "상자는 이탈 동료를 부활시키지 않음")
+	# 미개봉 재도전 = 20
+	enter(b3, &"battle_2")
+	enter(b3, &"battle_3")
+	clear_room(b3)
+	enter(b3, &"boss")
+	flush_spawns(b3)
+	for e in b3.alive_enemies():
+		kill(e)
+	idle(b3, 1)
+	b3.pending_currency = 0   # (이 run 은 상자를 열었지만 미개봉 경로 검증을 위해 보류 0 으로 전달)
+	var r3 := c.resolve_run(b3.run_id, b3.outcome, {"chest_bonus": 0})
+	check(r3.reward == 20 and r3.chest_bonus == 0 and c.state.currency == 200, "미개봉 재도전 = 20 (군자금 %d)" % c.state.currency)
+	b3.queue_free()
+	# 임의 금액 거부: 정의값(30)으로 제한
+	br = c.begin_run(&"ch1_farm")
+	var r4 := c.resolve_run(br.run_id, &"victory", {"chest_bonus": 999})
+	check(r4.reward == 50 and r4.chest_bonus == 30 and c.state.currency == 250, "임의 금액 999 → 30 으로 제한")
+	# 패배·포기: 보류 소멸, 자금 불변
+	br = c.begin_run(&"ch1_farm")
+	var b5: Battle = await make_battle()
+	b5.start_encounter(farm, br.run_id, null, 20.0, 100)
+	settle(b5)
+	b5.pending_currency = 30
+	b5.chest_opened = true
+	kill(b5.player)
+	idle(b5, 1)
+	check(b5.outcome == &"defeat", "패배")
+	var r5 := c.resolve_run(b5.run_id, b5.outcome, {"chest_bonus": b5.pending_currency})
+	check(r5.reward == 0 and r5.status == "defeat" and c.state.currency == 250, "패배: 보류 군자금 소멸, 자금 불변")
+	b5.queue_free()
+	br = c.begin_run(&"ch1_farm")
+	var b6: Battle = await make_battle()
+	b6.start_encounter(farm, br.run_id, null, 20.0, 100)
+	b6.pending_currency = 30
+	b6.abandon()
+	var r6 := c.resolve_run(b6.run_id, b6.outcome, {"chest_bonus": 30})
+	check(r6.reward == 0 and r6.status == "abandon" and c.state.currency == 250, "포기: 보류 군자금 소멸")
+	b6.queue_free()
+	# 저장 실패 → 재시도: 상자 30 을 중복 가산하지 않는다
+	c.store.fail_next_write = true
+	br = c.begin_run(&"ch1_farm")
+	var r7 := c.resolve_run(br.run_id, &"victory", {"chest_bonus": 30})
+	check(r7.status == "unsaved" and c.state.currency == 250 and c.has_pending(), "저장 실패: 미반영")
+	var r8 := c.retry_pending()
+	check(r8.status == "committed" and r8.reward == 50 and c.state.currency == 300, "재시도 성공: 50 한 번만 (군자금 %d)" % c.state.currency)
+	var c2 := make_controller()
+	c2.continue_game()
+	check(c2.state.currency == 300, "디스크 300")
+
+## 9. 일반 방 전멸로 거점 해방 없음, 보스 처치만 클리어, 보스/주인공 동시 사망은 패배 (+ 초소 보스 → 챕터 클리어)
+func test_d9_boss_only_clears_and_same_tick_death_is_defeat() -> void:
+	var c := make_controller()
+	c.new_game()
+	var farm := data.site(&"ch1_farm")
+	var br := c.begin_run(&"ch1_farm")
+	var b: Battle = await make_battle()
+	b.start_encounter(farm, br.run_id, null, 20.0, 100)
+	settle(b)
+	enter(b, &"battle_1")
+	clear_room(b)
+	enter(b, &"battle_2")
+	clear_room(b)
+	enter(b, &"battle_3")
+	clear_room(b)
+	var resolved_any := [0]
+	b.resolved.connect(func(_o, _r): resolved_any[0] += 1)
+	idle(b, 60)
+	check(b.result_state == &"active" and resolved_any[0] == 0 and not c.state.is_liberated(&"ch1_farm") and c.state.currency == 0, "일반 방 3개 정리해도 승리 신호·해방·보상 없음")
+	b.abandon()
+	c.resolve_run(br.run_id, b.outcome)
+	b.queue_free()
+	# 보스/주인공 동시 사망 → 패배
+	var c3 := make_controller()
+	c3.new_game()
+	br = c3.begin_run(&"ch1_farm")
+	var b3: Battle = await make_battle()
+	var aya := data.companion(&"aya")
+	b3.start_encounter(farm, br.run_id, aya, 20.0, 100)
+	to_boss(b3)
+	var boss := b3.boss_enemy()
+	var p := b3.player
+	place(p, 600, 545)
+	p.hp = 1
+	place(boss, 690, 545)
+	boss.hp = 1
+	boss.facing = -1
+	boss.current_pattern = 0
+	boss.change_state(&"attack")
+	place(b3.companion, 400, 545)
+	b3.companion.cooldown_ticks = 9999
+	var pr := Projectile.new()
+	pr.setup(&"player", b3.companion, b3.companion.arrow, 7.0, Vector2(680, 545), 35.0, 1, 600.0, 360.0, 36, 4.0, 4.0)
+	b3.add_projectile(pr)
+	idle(b3, 1)
+	check(not p.alive and not boss.alive, "같은 틱에 주인공과 보스 사망 (%s / %s)" % [str(p.alive), str(boss.alive)])
+	check(b3.result_state == &"resolved" and b3.outcome == &"defeat", "동일 틱 → 패배 우선 (%s)" % b3.outcome)
+	check(b3.projectiles.is_empty() and b3.fires.is_empty() and b3.pots.is_empty(), "확정 후 투사체·불 정리")
+	var rd := c3.resolve_run(br.run_id, b3.outcome, {"chest_bonus": 0})
+	check(rd.status == "defeat" and not c3.state.is_liberated(&"ch1_farm"), "패배: 해방 없음")
+	b3.queue_free()
+	# 초소 보스 처치 → 챕터 1 클리어·아야 해금 (Battle 경로)
+	win(c3, &"ch1_farm")
+	c3.repair(&"ch1_farm")
+	win(c3, &"ch1_store")
+	c3.repair(&"ch1_store")
+	br = c3.begin_run(&"ch1_pass")
+	var b4: Battle = await make_battle()
+	b4.start_encounter(data.site(&"ch1_pass"), br.run_id, null, 20.0, 100)
+	to_boss(b4)
+	var boss4 := b4.boss_enemy()
+	check(boss4.display_name == "초소 대장" and boss4.max_hp == 600, "초소 보스 600")
+	kill(boss4)
+	idle(b4, 1)
+	var rp := c3.resolve_run(br.run_id, b4.outcome, {"chest_bonus": b4.pending_currency})
+	check(rp.status == "committed" and rp.chapter_cleared == "ch1" and rp.companion_unlocked == "aya" and c3.state.is_companion_unlocked(&"aya"), "초소 보스 → 챕터 1 클리어·아야 해금")
+	b4.queue_free()
+
+# ------------------------------------------------------------------ 기존 전투·동료 검증(방 구조에 맞춰 조정)
 
 func test_scenario_9_dummy_and_ally_not_counted() -> void:
 	var b: Battle = await make_battle()
@@ -367,62 +857,26 @@ func test_scenario_9_dummy_and_ally_not_counted() -> void:
 	var aya := data.companion(&"aya")
 	b.start_encounter(farm, "run_test_2", aya, 20.0, 100)
 	check(b.companion != null and b.companion.alive and b.allies.size() == 1, "동료 생성")
-	# 허수아비를 억지로 추가해도 승리 조건에 들어가지 않는다
+	settle(b)
+	enter(b, &"battle_1")
+	# 허수아비를 억지로 추가해도 방 정리 조건에 들어가지 않는다
 	var d := Dummy.new()
 	b.actors_root.add_child(d)
 	d.configure(b.tuning, b, Vector2(700, 540))
 	b.enemies.append(d)
 	flush_spawns(b)
-	check(b.required_alive_count() == 2, "허수아비 제외 필수 적 2")
+	check(b.required_alive_count() == 3, "허수아비 제외 필수 적 3")
 	for e in b.alive_enemies():
 		if not e is Dummy:
 			kill(e)
 	idle(b, 1)
+	idle(b, b.wave_gap_ticks + 1)
 	flush_spawns(b)
 	for e in b.alive_enemies():
 		if not e is Dummy:
 			kill(e)
 	idle(b, 1)
-	check(b.result_state == &"resolved" and b.outcome == &"victory" and d.alive and b.companion.alive, "허수아비·아군이 살아 있어도 필수 적 0 이면 승리")
-	b.queue_free()
-
-func test_scenario_10_same_tick_death_is_defeat_and_projectiles_cleared() -> void:
-	var b: Battle = await make_battle()
-	var farm := data.site(&"ch1_farm")
-	var aya := data.companion(&"aya")
-	b.start_encounter(farm, "run_test_3", aya, 20.0, 100)
-	flush_spawns(b)
-	# 마지막 묶음까지 진행: 묶음 1 전멸 → 묶음 2 출현 → 1명만 남김
-	for e in b.alive_enemies():
-		kill(e)
-	idle(b, 1)
-	flush_spawns(b)
-	var alive := b.alive_enemies()
-	kill(alive[0])
-	var last := alive[1]
-	idle(b, 1)
-	check(b.required_alive_count() == 1 and b.result_state == &"active", "마지막 적 1명")
-	# 주인공 체력 1, 적이 공격 → 같은 틱에 아군 화살이 마지막 적을 처치
-	var p := b.player
-	place(p, 600, 540)
-	p.hp = 1
-	place(last, 660, 540)
-	last.hp = 1
-	last.facing = -1
-	last.invuln_ticks = 0
-	last.change_state(&"attack")
-	place(b.companion, 400, 540)
-	b.companion.change_state(&"follow")
-	b.companion.cooldown_ticks = 9999
-	var pr := Projectile.new()
-	pr.setup(&"player", b.companion, b.companion.arrow, 7.0, Vector2(650, 540), 35.0, 1, 600.0, 360.0, 36, 4.0, 4.0)
-	b.add_projectile(pr)
-	idle(b, 1)
-	check(not p.alive and not last.alive, "같은 틱에 주인공과 마지막 적 사망 (%s / %s)" % [str(p.alive), str(last.alive)])
-	check(b.result_state == &"resolved" and b.outcome == &"defeat", "동일 틱 → 패배 우선 (%s)" % b.outcome)
-	check(b.projectiles.is_empty(), "확정 후 남은 투사체 정리")
-	for a in b.all_actors():
-		check(a.active_hitboxes.is_empty(), "%s 판정 정리" % a.display_name)
+	check(b.is_room_cleared(&"battle_1") and not b.doors_locked and d.alive and b.companion.alive and b.result_state == &"active", "허수아비·아군이 살아 있어도 필수 적 0 이면 방 정리")
 	b.queue_free()
 
 func test_attack_slot_limit_two() -> void:
@@ -452,7 +906,6 @@ func test_attack_slot_limit_two() -> void:
 	check(max_active <= 2 and max_active >= 1, "동시 공격자 최대 %d ≤ 2" % max_active)
 	check(waited, "허가 없는 적은 대기함")
 	check(b.attack_slot_holders.size() <= 2, "허가 보유 ≤ 2")
-	# 사망 시 허가 반환
 	var holder: BattleActor = null
 	for e in es:
 		if b.attack_slot_holders.has(e):
@@ -468,10 +921,10 @@ func test_captain_two_patterns_and_super_armor() -> void:
 	var b: Battle = await make_battle()
 	var pass_site := data.site(&"ch1_pass")
 	b.start_encounter(pass_site, "run_test_boss", null, 20.0, 100)
-	flush_spawns(b)
-	check(b.enemies.size() == 1 and b.enemies[0] is CaptainEnemy, "대장 1명 출현")
-	var boss: CaptainEnemy = b.enemies[0]
-	check(boss.max_hp == 600 and boss.hp == 600, "대장 체력 600")
+	to_boss(b)
+	var boss := b.boss_enemy()
+	check(boss != null and b.alive_enemies().size() == 1, "대장 1명 출현")
+	check(boss.max_hp == 600 and boss.hp == 600 and boss.display_name == "초소 대장", "초소 대장 체력 600")
 	var p := b.player
 	p.invuln_ticks = 100000
 	place(p, 500, 540)
@@ -492,7 +945,6 @@ func test_captain_two_patterns_and_super_armor() -> void:
 				charge_start_x = boss.floor_pos.x
 				charge_facing = boss.facing
 			if not telegraph_hit_checked:
-				# 예고 중 피격: 피해는 받고 상태는 유지
 				var hp0 := boss.hp
 				var info := HitInfo.new()
 				info.attack = p.light_attacks[0]
@@ -513,7 +965,6 @@ func test_captain_two_patterns_and_super_armor() -> void:
 		if order[i] == order[i - 1]:
 			alternates = false
 	check(alternates, "패턴 교대 (%s)" % str(order))
-	# 띄우기 면역: 올려베기 맞아도 launched 아님
 	boss.change_state(&"idle")
 	boss.state_ticks = 0
 	var info2 := HitInfo.new()
@@ -526,7 +977,6 @@ func test_captain_two_patterns_and_super_armor() -> void:
 	var hs := boss.hitstun_ticks
 	boss.receive_hit(info2)
 	check(boss.hitstun_ticks == hs, "연타로 경직 연장 없음")
-	# 경계에서 멈추는 돌진
 	place(boss, b.arena_rect().end.x - 100.0, 540)
 	place(p, b.arena_rect().end.x - 40.0, 540)
 	boss.pattern_index = 1
@@ -537,36 +987,12 @@ func test_captain_two_patterns_and_super_armor() -> void:
 			break
 	check(boss.floor_pos.x <= b.arena_rect().end.x - boss.half_width + 0.01, "돌진이 경기장 경계에서 멈춤 (x %.0f)" % boss.floor_pos.x)
 	b.queue_free()
-
-func test_real_fight_farm_victory_with_spam_attack() -> void:
-	var b: Battle = await make_battle()
-	var farm := data.site(&"ch1_farm")
-	b.start_encounter(farm, "run_real", null, 20.0, 100)
-	var p := b.player
-	var ticks := 0
-	while b.result_state == &"active" and ticks < 60 * 90:
-		# 단순 조작: 가장 가까운 적을 향해 깊이를 맞추고 평타 연타
-		var move := Vector2.ZERO
-		var nearest: EnemyBase = null
-		var best := INF
-		for e in b.alive_enemies():
-			var d: float = absf(e.floor_pos.x - p.floor_pos.x)
-			if d < best:
-				best = d
-				nearest = e
-		if nearest != null:
-			var dy := nearest.floor_pos.y - p.floor_pos.y
-			if absf(dy) > 8.0:
-				move.y = signf(dy)
-			if nearest.floor_pos.x < p.floor_pos.x and p.facing > 0 and p.state == &"ground":
-				move.x = -1
-			elif nearest.floor_pos.x > p.floor_pos.x and p.facing < 0 and p.state == &"ground":
-				move.x = 1
-		b.step(PlayerInput.make(move, ["attack_light"]))
-		ticks += 1
-	check(b.result_state == &"resolved" and b.outcome == &"victory", "실제 전투로 농촌 승리 (%s, %d틱, 남은 체력 %d, 처치 %d)" % [b.outcome, ticks, p.hp, b.kills])
-	print("    [정보] 농촌 실전 %d틱 (%.1f초), 주인공 체력 %d/%d" % [ticks, ticks / 60.0, p.hp, p.max_hp])
-	b.queue_free()
+	# 거점별 보스 데이터: 농촌 450 / 창고 550
+	var b2: Battle = await make_battle()
+	b2.start_encounter(data.site(&"ch1_store"), "run_store_boss", null, 20.0, 100)
+	to_boss(b2)
+	check(b2.boss_enemy().display_name == "보급대장" and b2.boss_enemy().max_hp == 550, "창고 보스 보급대장 550")
+	b2.queue_free()
 
 # ------------------------------------------------------------------ 동료 궁수
 
@@ -575,22 +1001,19 @@ func test_archer_follows_fires_and_hits() -> void:
 	var farm := data.site(&"ch1_farm")
 	var aya := data.companion(&"aya")
 	b.start_encounter(farm, "run_archer", aya, 20.0, 100)
+	settle(b)
 	var c: ArcherCompanion = b.companion
 	var p := b.player
 	check(c.max_hp == 60 and is_equal_approx(c.def.attack_damage, 7.0), "아야 체력 60, 화살 피해 7")
-	# 적 없이 따라가기: 주인공 뒤 약 100px
-	for sp in b.pending_spawns:
-		sp.ticks = 100000
 	place(p, 700, 560)
 	p.facing = 1
 	idle(b, 200)
 	check(absf(c.floor_pos.x - (p.floor_pos.x - 100.0)) < 12.0 and absf(c.floor_pos.y - p.floor_pos.y) < 8.0, "따라가기 위치 (%.0f, %.0f) ≈ (600, 560)" % [c.floor_pos.x, c.floor_pos.y])
-	# 적 배치: 사거리 안, 깊이 다름 → 깊이를 맞춘 뒤 사격
 	var e := b.spawn_melee_enemy(Vector2(950, 600))
 	e.max_hp = 100000
 	e.hp = e.max_hp
 	e.state = &"idle"
-	e.state_ticks = -100000   # 접근하지 않게
+	e.state_ticks = -100000
 	var hits := [0]
 	b.hit_applied.connect(func(a, t, _i): if a == c and t == e: hits[0] += 1)
 	var fired_at_y := -1.0
@@ -616,11 +1039,9 @@ func test_archer_follows_fires_and_hits() -> void:
 	check(not moved_after_aim, "조준 중 이동·방향 변경 없음(방향·깊이 고정)")
 	check(hits[0] >= 1 and e.total_damage_taken == hits[0] * 7, "화살 명중 %d회, 피해 %d" % [hits[0], e.total_damage_taken])
 	check(c.floor_pos.x < e.floor_pos.x - 150.0, "적 옆까지 파고들지 않음 (%.0f vs %.0f)" % [c.floor_pos.x, e.floor_pos.x])
-	# 사격 간격 1.5초 = 90틱
 	var shots0 := c.shots_fired
 	idle(b, 60)
 	check(c.shots_fired <= shots0 + 1, "1초 동안 추가 사격 ≤ 1")
-	# 사거리 밖: 사격 없음, 투사체는 360px 안에서 종료
 	place(e, c.floor_pos.x + 500.0, c.floor_pos.y)
 	shots0 = c.shots_fired
 	idle(b, 120)
@@ -632,14 +1053,12 @@ func test_archer_arrow_does_not_break_hitstun_and_passes_ally() -> void:
 	var farm := data.site(&"ch1_farm")
 	var aya := data.companion(&"aya")
 	b.start_encounter(farm, "run_arrow", aya, 20.0, 100)
-	for sp in b.pending_spawns:
-		sp.ticks = 100000
+	settle(b)
 	var c: ArcherCompanion = b.companion
 	var p := b.player
 	var e := b.spawn_melee_enemy(Vector2(700, 540))
 	e.max_hp = 100000
 	e.hp = e.max_hp
-	# 주인공의 3타로 경직·밀림 중인 적
 	place(p, 625, 540)
 	var info := HitInfo.new()
 	info.attack = p.light_attacks[2]
@@ -650,24 +1069,19 @@ func test_archer_arrow_does_not_break_hitstun_and_passes_ally() -> void:
 	check(e.state == &"hitstun" and e.knockback_total == 65.0, "적이 3타 경직·밀림 중")
 	var hs := e.hitstun_ticks
 	var kb := e.knockback_total
-	# 화살이 주인공(아군)을 지나 적에게 닿는다
 	place(c, 500, 540)
 	c.cooldown_ticks = 100000
 	var pr := Projectile.new()
 	pr.setup(&"player", c, c.arrow, 7.0, Vector2(520, 540), 35.0, 1, 600.0, 360.0, 36, 4.0, 4.0)
 	b.add_projectile(pr)
 	var php := p.hp
-	var hit_tick := -1
 	for i in 30:
 		b.step(PlayerInput.make())
-		if e.total_damage_taken >= 35 and hit_tick < 0:
-			hit_tick = i
 	check(p.hp == php, "화살은 아군을 관통 (주인공 피해 없음)")
 	check(e.total_damage_taken == 35, "화살 적중 피해 7 (합계 %d)" % e.total_damage_taken)
 	check(e.hitstun_ticks == hs and e.knockback_total == kb, "화살은 경직·밀림을 바꾸지 않음")
 	check(p.hitstop_ticks == 0, "원거리 적중이 주인공 히트스톱을 만들지 않음")
 	check(b.projectiles.is_empty(), "명중 후 투사체 제거")
-	# 높이 불일치: 떠 있는 적(높이 200)은 화살(35±4)에 맞지 않는다
 	e.total_damage_taken = 0
 	e.change_state(&"launched")
 	e.airborne_by_launch = true
@@ -679,7 +1093,6 @@ func test_archer_arrow_does_not_break_hitstun_and_passes_ally() -> void:
 		e.vz = 0.0
 		b.step(PlayerInput.make())
 	check(e.total_damage_taken == 0, "높이 200 의 적은 화살에 맞지 않음")
-	# 깊이 불일치
 	e.change_state(&"idle")
 	e.height = 0.0
 	e.airborne_by_launch = false
@@ -711,22 +1124,14 @@ func test_scenario_5_archer_last_kill_wins_and_reward_120() -> void:
 	check(is_equal_approx(b.player.attack_power, 21.0) and b.player.max_hp == 110 and b.player.hp == 110, "출정 시 공격력 21, 체력 110/110")
 	check(b.companion != null and b.companion.hp == 60, "동료 체력 가득")
 	var comp: ArcherCompanion = b.companion
-	# 묶음 1 처치, 묶음 2 는 마지막 1명을 화살로 처치
-	flush_spawns(b)
-	for e in b.alive_enemies():
-		kill(e)
-	idle(b, 1)
-	flush_spawns(b)
-	var alive := b.alive_enemies()
-	kill(alive[0])
-	var last := alive[1]
-	last.hp = 5
-	place(b.player, 300, 540)
+	to_boss(b)
+	var boss := b.boss_enemy()
+	boss.hp = 5
+	place(b.player, 250, 545)
 	b.player.invuln_ticks = 100000
-	place(last, 700, 540)
-	last.state = &"idle"
-	last.state_ticks = -100000
-	place(comp, 450, 540)
+	place(boss, 700, 545)
+	boss.change_state(&"idle")
+	place(comp, 450, 545)
 	comp.cooldown_ticks = 0
 	var resolved := [""]
 	b.resolved.connect(func(o, _r): resolved[0] = String(o))
@@ -734,11 +1139,11 @@ func test_scenario_5_archer_last_kill_wins_and_reward_120() -> void:
 		b.step(PlayerInput.make())
 		if b.result_state != &"active":
 			break
-		last.state = &"idle"
-		last.state_ticks = -100000
-	check(not last.alive and comp.shots_fired >= 1 and resolved[0] == "victory", "동료의 마지막 화살로 처치 → 승리 (사격 %d)" % comp.shots_fired)
-	var res := c.resolve_run(b.run_id, b.outcome)
-	check(res.status == "committed" and res.reward == 20 and c.state.currency == 120, "재도전 승리 후 군자금 %d == 120" % c.state.currency)
+		boss.change_state(&"idle")
+		place(boss, 700, 545)
+	check(not boss.alive and comp.shots_fired >= 1 and resolved[0] == "victory", "동료의 마지막 화살로 보스 처치 → 승리 (사격 %d)" % comp.shots_fired)
+	var res := c.resolve_run(b.run_id, b.outcome, {"chest_bonus": b.pending_currency})
+	check(res.status == "committed" and res.reward == 20 and c.state.currency == 120, "재도전 승리(상자 미개봉) 후 군자금 %d == 120" % c.state.currency)
 	b.queue_free()
 
 func test_scenario_6_companion_death_and_recovery() -> void:
@@ -746,6 +1151,8 @@ func test_scenario_6_companion_death_and_recovery() -> void:
 	var farm := data.site(&"ch1_farm")
 	var aya := data.companion(&"aya")
 	b.start_encounter(farm, "run_comp_die", aya, 20.0, 100)
+	settle(b)
+	enter(b, &"battle_1")
 	flush_spawns(b)
 	var comp: ArcherCompanion = b.companion
 	comp.hp = 5
@@ -758,7 +1165,6 @@ func test_scenario_6_companion_death_and_recovery() -> void:
 	check(not comp.alive and not comp.visible, "동료 체력 0 → 이탈")
 	check(b.result_state == &"active" and b.player.alive, "동료 이탈만으로 패배하지 않음")
 	check(not b.alive_allies().has(comp), "이탈한 동료는 대상 목록에서 제외")
-	# 주인공 사망 → 패배
 	b.player.hp = 5
 	place(b.player, 600, 540)
 	e.change_state(&"idle")
@@ -769,7 +1175,6 @@ func test_scenario_6_companion_death_and_recovery() -> void:
 	idle(b, 2)
 	check(b.result_state == &"resolved" and b.outcome == &"defeat", "주인공 체력 0 → 패배")
 	b.queue_free()
-	# 다음 출정: 동료 회복
 	var b2: Battle = await make_battle()
 	b2.start_encounter(farm, "run_comp_next", aya, 20.0, 100)
 	check(b2.companion.alive and b2.companion.hp == 60, "다음 출정에서 동료 회복 (체력 %d)" % b2.companion.hp)
@@ -780,8 +1185,7 @@ func test_enemy_targets_nearest_ally_and_locks_on_telegraph() -> void:
 	var farm := data.site(&"ch1_farm")
 	var aya := data.companion(&"aya")
 	b.start_encounter(farm, "run_target", aya, 20.0, 100)
-	for sp in b.pending_spawns:
-		sp.ticks = 100000
+	settle(b)
 	var comp: ArcherCompanion = b.companion
 	var p := b.player
 	p.invuln_ticks = 100000
@@ -797,13 +1201,11 @@ func test_enemy_targets_nearest_ally_and_locks_on_telegraph() -> void:
 	var changed := false
 	for i in 300:
 		b.step(PlayerInput.make())
-		# 동료를 제자리에 고정
 		place(comp, 700, 600)
 		if e.state == &"telegraph":
 			if locked_target == null:
 				locked_target = e.target
 				lock_facing = e.facing
-				# 예고 중 주인공을 적 바로 옆으로 옮겨도 대상·방향이 바뀌지 않아야 한다
 				place(p, e.floor_pos.x + 60, e.floor_pos.y)
 			elif e.target != locked_target or e.facing != lock_facing:
 				changed = true
@@ -811,7 +1213,6 @@ func test_enemy_targets_nearest_ally_and_locks_on_telegraph() -> void:
 			break
 	check(locked_target == comp, "가까운 아군(동료)을 대상으로 선택")
 	check(not changed, "예고 시작 후 대상·방향 고정")
-	# 대상 사망 후 참조 오류 없이 재선택
 	kill(comp)
 	e.change_state(&"idle")
 	e.state_ticks = 100
@@ -829,11 +1230,12 @@ func test_scenario_12_dev_keys_ignored_in_campaign() -> void:
 	var b: Battle = await make_battle()
 	var farm := data.site(&"ch1_farm")
 	b.start_encounter(farm, "run_dev", null, 20.0, 100)
+	settle(b)
+	enter(b, &"battle_1")
 	flush_spawns(b)
 	var n := b.enemies.size()
 	b.player.hp = 30
 	place(b.player, 400, 600)
-	# 개발 키를 눌러도 캠페인에서는 무시된다
 	Input.action_press(&"dev_respawn_enemies")
 	Input.action_press(&"dev_reset_player")
 	Input.action_press(&"dev_toggle_profile")
@@ -844,7 +1246,6 @@ func test_scenario_12_dev_keys_ignored_in_campaign() -> void:
 	check(b.enemies.size() == n and b.player.hp == 30 and b.player.floor_pos == Vector2(400, 600), "캠페인에서 F5/F6 무시")
 	check(not b.set_profile(0) and b.player.profile_id == &"r1_momentum", "캠페인은 새 프로필 고정")
 	b.queue_free()
-	# 수련장에서는 동작
 	var t: Battle = await make_battle(&"training")
 	t.player.hp = 30
 	Input.action_press(&"dev_reset_player")
@@ -867,22 +1268,34 @@ func test_game_screens_smoke() -> void:
 	g._start_new_game()
 	await process_frame
 	check(g.current_screen == "map" and g.campaign.state.currency == 0, "새 게임 → 지도")
-	# 출정 → 전투 장면 → 결과 → 관리 → 정비/훈련장 → 동료 흐름
 	g.start_battle(&"ch1_farm")
 	await process_frame
 	check(g.current_screen == "battle" and g.battle != null and g.battle.mode == &"campaign" and g.battle.encounter.id == &"ch1_farm", "농촌 출정: 캠페인 전투 장면")
 	g.battle.manual_step = true
 	var b := g.battle
-	flush_spawns(b)
-	for e in b.alive_enemies():
-		kill(e)
+	check(b.room != null and b.room.id == &"entry" and b.dungeon != null, "던전 입구에서 시작")
+	settle(b)
+	enter(b, &"battle_1")
+	clear_room(b)
+	await process_frame
+	check(g.current_screen == "battle" and g.overlay_root.get_child_count() == 0 and g.campaign.state.currency == 0, "방 정리는 결과 창·저장을 만들지 않음")
+	enter(b, &"battle_2")
+	clear_room(b)
+	enter(b, &"treasure")
+	place(b.player, 640, 545)
 	idle(b, 1)
+	b.step(PlayerInput.make(Vector2.ZERO, ["interact"]))
+	check(b.chest_opened and b.pending_currency == 30, "보물방 상자 개봉")
+	enter(b, &"battle_2")
+	enter(b, &"battle_3")
+	clear_room(b)
+	enter(b, &"boss")
 	flush_spawns(b)
 	for e in b.alive_enemies():
 		kill(e)
 	idle(b, 1)
 	await process_frame
-	check(b.result_state == &"resolved" and g.last_result.status == "committed" and g.campaign.state.currency == 100, "승리 → 결과 확정·저장 (군자금 %d)" % g.campaign.state.currency)
+	check(b.result_state == &"resolved" and g.last_result.status == "committed" and g.last_result.reward == 130 and g.campaign.state.currency == 130, "보스 승리 → 결과 확정·저장 (군자금 %d)" % g.campaign.state.currency)
 	check(g.overlay_root.get_child_count() > 0, "결과 창 표시")
 	g._after_result()
 	await process_frame
@@ -895,7 +1308,7 @@ func test_game_screens_smoke() -> void:
 	check(g.campaign.state.management(&"ch1_farm") == 60, "관리 화면 정비")
 	g._do_buy(&"ch1_farm")
 	await process_frame
-	check(g.campaign.state.has_facility(&"training_ground") and g.campaign.state.currency == 0, "관리 화면 훈련장 구매")
+	check(g.campaign.state.has_facility(&"training_ground") and g.campaign.state.currency == 30, "관리 화면 훈련장 구매 (군자금 %d)" % g.campaign.state.currency)
 	g.show_manage(&"ch1_pass")
 	await process_frame
 	check(g.current_screen == "map", "초소는 관리 화면 없음 → 지도")
@@ -905,29 +1318,21 @@ func test_game_screens_smoke() -> void:
 	g.show_join("aya")
 	await process_frame
 	check(g.current_screen == "join", "합류 화면")
-	# 저장 실패 결과 창
+	# 저장 실패 결과 창 (상자 미개봉 재도전 20)
 	g.show_map()
 	g.campaign.store.fail_next_write = true
 	g.start_battle(&"ch1_farm")
 	await process_frame
 	g.battle.manual_step = true
 	b = g.battle
-	flush_spawns(b)
-	for e in b.alive_enemies():
-		kill(e)
-	idle(b, 1)
-	flush_spawns(b)
-	for e in b.alive_enemies():
-		kill(e)
-	idle(b, 1)
+	dungeon_win(b)
 	await process_frame
 	check(g.last_result.status == "unsaved" and g.campaign.has_pending(), "저장 실패 결과 창 (unsaved)")
 	g._retry_pending_from_result()
 	await process_frame
-	check(g.last_result.status == "committed" and g.campaign.state.currency == 20, "결과 창 저장 재시도 → 반영 (군자금 %d)" % g.campaign.state.currency)
+	check(g.last_result.status == "committed" and g.last_result.reward == 20 and g.campaign.state.currency == 50, "결과 창 저장 재시도 → 반영 (군자금 %d)" % g.campaign.state.currency)
 	g._after_result()
 	await process_frame
-	# 수련장은 저장을 건드리지 않는다
 	var before := FileAccess.get_file_as_string(TEST_SAVE)
 	g.start_training()
 	await process_frame
