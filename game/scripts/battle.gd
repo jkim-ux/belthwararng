@@ -204,6 +204,22 @@ func spawn_captain(at: Vector2, boss_name: String = "", boss_hp: int = 0) -> Cap
 	enemies.append(e)
 	return e
 
+func spawn_archer_enemy(at: Vector2) -> ArcherEnemy:
+	var e := ArcherEnemy.new()
+	actors_root.add_child(e)
+	e.configure(tuning, self, at, player)
+	e.died.connect(_on_enemy_died)
+	enemies.append(e)
+	return e
+
+func spawn_thrower_enemy(at: Vector2) -> ThrowerEnemy:
+	var e := ThrowerEnemy.new()
+	actors_root.add_child(e)
+	e.configure(tuning, self, at, player)
+	e.died.connect(_on_enemy_died)
+	enemies.append(e)
+	return e
+
 ## 데이터의 종류 이름으로 적을 생성한다. &"melee" / &"archer" / &"thrower" / &"boss"(거점 던전의 대장) / &"captain"(기본 대장)
 func spawn_enemy_kind(kind: StringName, at: Vector2) -> EnemyBase:
 	# 플레이어와 바로 겹치지 않게 등장 위치를 보정한다.
@@ -219,11 +235,14 @@ func spawn_enemy_kind(kind: StringName, at: Vector2) -> EnemyBase:
 			return spawn_captain(at)
 		&"captain":
 			return spawn_captain(at)
+		&"archer":
+			return spawn_archer_enemy(at)
+		&"thrower":
+			return spawn_thrower_enemy(at)
 		&"melee":
 			return spawn_melee_enemy(at)
 		_:
-			# (3단계에서 궁수·투척병을 등록한다. 그 전까지는 근접병으로 대체)
-			push_warning("미등록 적 종류 %s → 근접병으로 대체" % kind)
+			push_warning("알 수 없는 적 종류 %s → 근접병으로 대체" % kind)
 			return spawn_melee_enemy(at)
 
 func _on_enemy_died(_actor: BattleActor) -> void:

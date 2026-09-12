@@ -27,6 +27,10 @@ func _initialize() -> void:
 		"test_d1_room_two_waves_lock_and_clear_is_not_victory",
 		"test_d2_room_revisit_door_targets_and_single_transition",
 		"test_d3_room_transition_preserves_hp_cooldowns_and_clears_transients",
+		"test_d4_enemy_archer_aim_lock_height_depth_sweep_and_shared_slot",
+		"test_d5_thrower_telegraph_landing_cancel_death_and_cap",
+		"test_d6_fire_damage_timing_overlap_jump_dodge_no_hitstun",
+		"test_d7_companion_avoids_fire_and_last_kill_results",
 		"test_d8_chest_once_heal_pending_and_rewards",
 		"test_d9_boss_only_clears_and_same_tick_death_is_defeat",
 		"test_scenario_9_dummy_and_ally_not_counted",
@@ -38,6 +42,7 @@ func _initialize() -> void:
 		"test_scenario_6_companion_death_and_recovery",
 		"test_enemy_targets_nearest_ally_and_locks_on_telegraph",
 		"test_scenario_12_dev_keys_ignored_in_campaign",
+		"test_real_fight_three_sites_two_strategies",
 		"test_game_screens_smoke",
 	]
 	for t in tests:
@@ -489,7 +494,7 @@ func test_d1_room_two_waves_lock_and_clear_is_not_victory() -> void:
 		kinds.append(sp.kind)
 	check(kinds == [&"melee", &"melee", &"archer"], "2웨이브 구성 근접 2 + 궁수 1 (%s)" % str(kinds))
 	flush_spawns(b)
-	check(b.required_alive_count() == 3, "2웨이브 출현 3")
+	check(b.required_alive_count() == 3 and count_of(b.alive_enemies(), ArcherEnemy) == 1, "2웨이브 출현: 궁수 포함")
 	for e in b.alive_enemies():
 		kill(e)
 	idle(b, 1)
@@ -638,6 +643,493 @@ func test_d3_room_transition_preserves_hp_cooldowns_and_clears_transients() -> v
 	check(b2.player.hp == 100 and b2.companion.alive and b2.companion.hp == 60 and b2.player.cooldowns[&"bieonchan"] == 0, "새 출정: 체력·동료·대기시간 초기화")
 	b2.queue_free()
 
+## 4. 궁수 조준 고정·높이·깊이·아군 팀 구분·고속 투사체 이동 구간 적중, 원거리 허가 공유 1, 예고 중 경직 취소, 짧은 후퇴
+func test_d4_enemy_archer_aim_lock_height_depth_sweep_and_shared_slot() -> void:
+	var b: Battle = await make_battle()
+	var farm := data.site(&"ch1_farm")
+	b.start_encounter(farm, "run_archer_enemy", null, 20.0, 100)
+	settle(b)
+	var p := b.player
+	var a := b.spawn_archer_enemy(Vector2(900, 545))
+	check(a.max_hp == 55 and a.required_for_victory, "적 궁수 체력 55")
+	place(p, 400, 545)
+	a.cooldown_ticks = 0
+	var aim_seen := false
+	var aim_y := -1.0
+	var aim_facing := 0
+	var moved_while_aim := false
+	var prev: StringName = a.state
+	var fired: Projectile = null
+	for i in 240:
+		b.step(PlayerInput.make())
+		if a.state == &"aim":
+			if prev != &"aim":
+				aim_seen = true
+				aim_y = a.aim_y
+				aim_facing = a.aim_facing
+				# 예고 시작 뒤 주인공이 깊이를 바꿔도 사격선은 고정
+				place(p, 400, 620)
+			elif a.aim_y != aim_y or a.aim_facing != aim_facing or a.facing != aim_facing:
+				moved_while_aim = true
+		if a.state == &"recover" and fired == null and not b.projectiles.is_empty():
+			fired = b.projectiles[0]
+			break
+		prev = a.state
+	check(aim_seen and not moved_while_aim, "예고 중 방향·깊이 고정")
+	check(fired != null and fired.team == &"enemy" and is_equal_approx(fired.floor_pos.y, aim_y) and fired.facing == -1 and is_equal_approx(absf(fired.vx), 650.0), "적 화살: 팀 enemy, 고정 깊이, 650 px/s")
+	check(a.shots_fired == 1 and Ticks.to_ms(Ticks.from_ms(650.0)) >= 640.0, "예고 0.65초 뒤 1발")
+	var hp0 := p.hp
+	idle(b, 70)
+	check(p.hp == hp0 and b.projectiles.is_empty(), "깊이를 벗어난 주인공은 맞지 않고 화살은 사거리에서 소멸")
+	# 높이: 점프 중(높이 100)에는 맞지 않는다
+	place(p, 400, 545)
+	a.change_state(&"idle")
+	a.cooldown_ticks = 0
+	var fired_tick := -1
+	for i in 240:
+		b.step(PlayerInput.make())
+		if a.shots_fired == 2 and fired_tick < 0:
+			fired_tick = i
+		if fired_tick >= 0:
+			p.height = 100.0
+			p.vz = 0.0
+		if fired_tick >= 0 and b.projectiles.is_empty():
+			break
+	check(fired_tick >= 0 and p.hp == hp0, "높이 100 의 주인공은 화살(35±4)에 맞지 않음")
+	p.height = 0.0
+	# 정상 적중: 피해 8 + 기존 단발 피격 규칙(경직)
+	a.change_state(&"idle")
+	a.cooldown_ticks = 0
+	var e_between := b.spawn_melee_enemy(Vector2(650, 545))
+	e_between.state = &"idle"
+	e_between.state_ticks = -100000
+	var ehp := e_between.hp
+	for i in 300:
+		b.step(PlayerInput.make())
+		e_between.state = &"idle"
+		e_between.state_ticks = -100000
+		if p.hp < hp0:
+			break
+	check(p.hp == hp0 - 8 and p.state == &"hitstun", "적중: 피해 8, 경직 (체력 %d, %s)" % [p.hp, p.state])
+	check(e_between.hp == ehp, "적 화살은 같은 팀(사이의 근접병)을 관통")
+	check(b.projectiles.is_empty(), "단일 아군 피해 후 소멸")
+	a.cooldown_ticks = 100000
+	# 고속 투사체 이동 구간 판정: 한 틱에 200 px 이동해 대상을 지나쳐도 적중
+	idle(b, 30)
+	place(p, 400, 545)
+	p.change_state(&"ground")
+	hp0 = p.hp
+	var fast := Projectile.new()
+	fast.setup(&"enemy", a, a.arrow, 8.0, Vector2(300, 545), 35.0, 1, 12000.0, 560.0, 10, 4.0, 8.0)
+	b.add_projectile(fast)
+	idle(b, 1)
+	check(fast.floor_pos.x >= 490.0 and p.hp == hp0 - 8, "200 px/틱 화살이 이동 구간(300→500)에서 x=400 의 주인공 적중 (체력 %d)" % p.hp)
+	# 최대 사거리 마지막 구간도 판정: 남은 거리 5 px 인 화살이 대상에 닿으면 적중
+	idle(b, 30)
+	place(p, 400, 545)
+	p.change_state(&"ground")
+	hp0 = p.hp
+	var last := Projectile.new()
+	last.setup(&"enemy", a, a.arrow, 8.0, Vector2(360, 545), 35.0, 1, 650.0, 12.0, 10, 4.0, 8.0)
+	b.add_projectile(last)
+	idle(b, 2)
+	check(p.hp == hp0 - 8 and b.projectiles.is_empty(), "사거리 12 px 로 끝나는 마지막 구간에서도 적중 후 제거")
+	# 원거리 허가 공유 1: 궁수 2명이 같은 깊이 → 동시에 예고하지 않는다
+	idle(b, 30)
+	p.invuln_ticks = 100000
+	place(p, 300, 545)
+	var a2 := b.spawn_archer_enemy(Vector2(1000, 545))
+	place(a, 800, 545)
+	a.change_state(&"idle")
+	a.cooldown_ticks = 0
+	a2.cooldown_ticks = 0
+	var max_aiming := 0
+	var waited := false
+	var both_fired := false
+	for i in 400:
+		b.step(PlayerInput.make())
+		var n := 0
+		for x in [a, a2]:
+			if x.state == &"aim":
+				n += 1
+			if x.waiting_for_slot:
+				waited = true
+		max_aiming = maxi(max_aiming, n)
+		if a.shots_fired > 0 and a2.shots_fired > 0:
+			both_fired = true
+	check(max_aiming == 1 and waited, "동시 예고 최대 %d == 1, 허가 대기 발생" % max_aiming)
+	check(b.ranged_slot_holders.size() <= 1, "원거리 허가 보유 ≤ 1")
+	# 예고 중 경직 → 발사 취소·허가 반환
+	b.enemies.erase(a2)
+	a2.free()
+	a.change_state(&"idle")
+	a.cooldown_ticks = 0
+	var shots := a.shots_fired
+	for i in 200:
+		b.step(PlayerInput.make())
+		if a.state == &"aim" and a.state_ticks >= 5:
+			stagger(a)
+			break
+	check(a.state == &"hitstun" and not b.ranged_slot_holders.has(a), "예고 중 피격 → 경직, 허가 반환")
+	a.cooldown_ticks = 100000
+	idle(b, 60)
+	check(a.shots_fired == shots, "취소된 예고는 발사하지 않음")
+	# 근접 시 짧은 후퇴(최대 100 px / 0.4초) 후 다시 싸움; 궁지(경계)에서는 후퇴하지 않음
+	a.change_state(&"idle")
+	a.cooldown_ticks = 100000
+	place(a, 700, 545)
+	place(p, 660, 545)
+	var start_x := a.floor_pos.x
+	var retreated := false
+	var retreat_max := 0.0
+	var back_to_fight := false
+	for i in 120:
+		b.step(PlayerInput.make())
+		place(p, 660, 545)
+		if a.state == &"retreat":
+			retreated = true
+			retreat_max = maxf(retreat_max, absf(a.floor_pos.x - start_x))
+		elif retreated and (a.state == &"approach" or a.state == &"aim" or a.state == &"idle"):
+			back_to_fight = true
+	check(retreated and retreat_max <= 100.01 and back_to_fight, "근접 시 후퇴 ≤ 100 px (%.0f) 후 복귀" % retreat_max)
+	place(a, b.arena_rect().end.x - a.half_width - 5.0, 545)
+	place(p, a.floor_pos.x - 60.0, 545)
+	a.change_state(&"idle")
+	var cornered_retreat := false
+	for i in 60:
+		b.step(PlayerInput.make())
+		place(p, a.floor_pos.x - 60.0, 545)
+		if a.state == &"retreat":
+			cornered_retreat = true
+	check(not cornered_retreat, "경계에 몰린 궁수는 후퇴하지 않고 자리를 잡음")
+	b.queue_free()
+
+## 5. 투척 예고와 착탄 일치, 준비 취소/발사 후 투척병 사망, 화염 예약 포함 최대 2, 직격 피해 없음, 안전 지점 회피
+func test_d5_thrower_telegraph_landing_cancel_death_and_cap() -> void:
+	var b: Battle = await make_battle()
+	var farm := data.site(&"ch1_farm")
+	b.start_encounter(farm, "run_thrower", null, 20.0, 100)
+	settle(b)
+	var p := b.player
+	var t := b.spawn_thrower_enemy(Vector2(950, 545))
+	check(t.max_hp == 60, "투척병 체력 60")
+	place(p, 600, 560)
+	t.cooldown_ticks = 0
+	var aim := Vector2.INF
+	var windup_tick := -1
+	var pot_tick := -1
+	var land_tick := -1
+	var hp_at_land := -1
+	for i in 300:
+		b.step(PlayerInput.make())
+		if t.state == &"windup" and windup_tick < 0:
+			windup_tick = i
+			aim = t.aim_point
+			check(aim.distance_to(Vector2(600, 560)) < 1.0, "준비 시작 시 목표 발 위치 고정 (%s)" % str(aim))
+			place(p, 600, 660)   # 준비 중 이동해도 착탄점 불변
+		if not b.pots.is_empty() and pot_tick < 0:
+			pot_tick = i
+			check(t.aim_point == aim and b.pots[0].target == aim, "항아리 목표 = 고정 착탄점")
+			place(p, aim.x, aim.y)   # 착탄 지점에 서 있기(직격 피해 없음 확인)
+		if not b.fires.is_empty() and land_tick < 0:
+			land_tick = i
+			hp_at_land = p.hp
+			break
+	# 항아리는 던진 틱에도 한 번 진행하므로 관측 기준 비행은 30틱(던진 틱 포함) = 관측 29틱 뒤 착탄
+	check(windup_tick >= 0 and pot_tick - windup_tick == Ticks.from_ms(650.0) and land_tick - pot_tick == Ticks.from_ms(500.0) - 1, "준비 %d틱 + 비행 %d틱(던진 틱 포함 30)" % [pot_tick - windup_tick, land_tick - pot_tick + 1])
+	check(b.fires.size() == 1 and b.fires[0].center == aim and b.pots.is_empty(), "착탄 지점에 불 생성, 예약 소모")
+	check(hp_at_land == 100, "직격 피해 없음(장판 피해만)")
+	check(b.is_in_fire(p.floor_pos), "불 범위 = 예고 범위(발 위치 안)")
+	place(p, 300, 545)
+	# 준비 중 경직 → 취소(항아리 없음), 허가 반환
+	t.change_state(&"idle")
+	t.cooldown_ticks = 0
+	var throws := t.throws
+	for i in 200:
+		b.step(PlayerInput.make())
+		if t.state == &"windup" and t.state_ticks >= 5:
+			stagger(t)
+			break
+	check(t.state == &"hitstun" and not b.ranged_slot_holders.has(t), "준비 중 피격 → 취소·허가 반환")
+	idle(b, 80)
+	check(t.throws == throws and b.pots.is_empty(), "취소된 준비는 항아리를 던지지 않음")
+	# 발사 후 사망: 항아리는 착탄한다
+	t.change_state(&"idle")
+	t.cooldown_ticks = 0
+	for i in 200:
+		b.step(PlayerInput.make())
+		if not b.pots.is_empty():
+			break
+	check(not b.pots.is_empty(), "항아리 발사")
+	kill(t)
+	var fires_before := b.fires.size()
+	idle(b, Ticks.from_ms(500.0) + 1)
+	check(b.fires.size() == fires_before + 1 and b.pots.is_empty(), "투척병 사망 후에도 착탄 (불 %d)" % b.fires.size())
+	# 예약 포함 최대 2: 불 2개가 살아 있는 동안 새 투척병 2명은 준비하지 못한다
+	while b.fires.size() < 2:
+		b._spawn_fire(Vector2(400, 500))
+	check(b.fires.size() == 2 and not b.fire_slot_available(), "활성 화염 2 → 자리 없음")
+	var t2 := b.spawn_thrower_enemy(Vector2(700, 500))
+	var t3 := b.spawn_thrower_enemy(Vector2(750, 600))
+	t2.cooldown_ticks = 0
+	t3.cooldown_ticks = 0
+	var max_used := 0
+	var windup_seen := false
+	var waited := false
+	for i in 120:
+		b.step(PlayerInput.make())
+		max_used = maxi(max_used, b.fire_slots_used())
+		if t2.state == &"windup" or t3.state == &"windup":
+			windup_seen = true
+		if t2.waiting_for_slot or t3.waiting_for_slot:
+			waited = true
+	check(max_used <= 2 and not windup_seen and waited, "활성+예약 화염 최대 %d ≤ 2, 자리 없으면 대기(기존 불 삭제 없음)" % max_used)
+	# 불이 꺼진 뒤 두 투척병이 동시에 예약해 2를 넘기지 않는다(원거리 허가 1 + 화염 자리)
+	for fz in b.fires:
+		fz.age = fz.life_ticks
+	idle(b, 2)
+	check(b.fires.is_empty(), "수명 종료로 불 제거")
+	max_used = 0
+	for i in 400:
+		b.step(PlayerInput.make())
+		max_used = maxi(max_used, b.fire_slots_used())
+	check(max_used <= 2, "두 투척병 동시 예약에도 최대 %d ≤ 2" % max_used)
+	# 안전 지점 회피: 주인공이 문 진입 지점에 서 있으면 착탄점 중심을 거기 두지 않는다
+	for fz in b.fires:
+		fz.age = fz.life_ticks
+	idle(b, 2)
+	b.enemies.erase(t3)
+	t3.free()
+	var ep := b.entry_point(&"west")
+	place(p, ep.x, ep.y)
+	t2.change_state(&"idle")
+	t2.cooldown_ticks = 0
+	place(t2, 600, 545)
+	var aim2 := Vector2.INF
+	var trace: Array = []
+	for i in 200:
+		b.step(PlayerInput.make())
+		place(p, ep.x, ep.y)
+		if i % 20 == 0:
+			trace.append("%d:%s@%.0f cd%d slots%d/%d w%s" % [i, t2.state, t2.floor_pos.x, t2.cooldown_ticks, b.fire_slots_used(), b.ranged_slot_holders.size(), t2.wait_reason])
+		if t2.state == &"windup":
+			aim2 = t2.aim_point
+			break
+	if aim2 == Vector2.INF:
+		print("    [trace] ", trace)
+	check(aim2 != Vector2.INF and aim2.distance_to(ep) >= 80.0 and b.valid_fire_target(aim2), "문 진입 안전 지점을 피한 착탄점 (%s, 거리 %.0f)" % [str(aim2), aim2.distance_to(ep) if aim2 != Vector2.INF else -1.0])
+	b.queue_free()
+
+## 6. 첫 불 피해까지 0.5초, 연속 4초 체류 시 최대 8회(24), 겹침 비중첩, 출입·점프·회피, 공격 경직 없음, 적 무피해, 방 이동 시 시계 정리
+func test_d6_fire_damage_timing_overlap_jump_dodge_no_hitstun() -> void:
+	var b: Battle = await make_battle()
+	var farm := data.site(&"ch1_farm")
+	b.start_encounter(farm, "run_fire", null, 20.0, 100)
+	settle(b)
+	var p := b.player
+	place(p, 500, 545)
+	var burns: Array = []
+	p.burn_taken.connect(func(_a, amt): burns.append([b.tick, amt]))
+	# A. 시간 규칙: 노출을 확인한 틱(생성 뒤 첫 틱) + 30 에 첫 피해, 이후 30틱마다, 수명 마지막 틱 판정 뒤 제거
+	var fz := b._spawn_fire(Vector2(500, 545))
+	var t0 := b.tick
+	idle(b, 30)
+	check(p.hp == 100 and burns.is_empty(), "노출 뒤 30틱 동안 피해 없음")
+	idle(b, 1)
+	check(p.hp == 97 and burns.size() == 1 and burns[0][0] == t0 + 31, "첫 피해는 노출 확인 틱 + 30 (= 생성 뒤 31틱째) 에 3")
+	var steps := 31
+	while is_instance_valid(fz) and fz.alive and steps < 400:
+		idle(b, 1)
+		steps += 1
+	check(steps == 241, "생성 뒤 241틱째(나이 240 판정 뒤) 제거 (%d)" % steps)
+	check(burns.size() == 8 and p.hp == 100 - 24, "4초 체류: 8회 24 피해 (%d회, 체력 %d)" % [burns.size(), p.hp])
+	check(b.fire_clocks.is_empty(), "불이 없으면 피해 시계 정리")
+	# B. 겹침: 같은 자리 불 2개 → 대상당 주기 하나(초당 6 최대)
+	p.hp = 100
+	burns.clear()
+	b._spawn_fire(Vector2(500, 545))
+	b._spawn_fire(Vector2(520, 545))
+	idle(b, 91)
+	check(burns.size() == 3 and p.hp == 91, "겹친 불 위 91틱: 3회 9 피해 (비중첩) (%d회, 체력 %d)" % [burns.size(), p.hp])
+	_expire_fires(b)
+	# C. 나가면 없음, 재진입 시 시계를 초기화하지 않고 예정 주기에 피해(몰아 넣기 없음)
+	b._spawn_fire(Vector2(500, 545))
+	idle(b, 31)
+	check(p.hp == 88, "재생성 불: 31틱째 피해")
+	place(p, 300, 545)
+	idle(b, 60)
+	check(p.hp == 88, "불 밖 60틱: 피해 없음")
+	place(p, 500, 545)
+	idle(b, 30)
+	check(p.hp == 85, "재진입 30틱 안에 정확히 1회(예정 주기 유지, 몰아 넣기 없음)")
+	_expire_fires(b)
+	# D. 점프: 예정 틱에 높이 12 초과면 건너뛰고 착지 후 다음 주기에 피해
+	b._spawn_fire(Vector2(500, 545))
+	idle(b, 30)
+	p.height = 40.0
+	idle(b, 1)
+	check(p.hp == 85, "예정 틱에 공중(높이 40) → 건너뜀")
+	p.height = 0.0
+	idle(b, 30)
+	check(p.hp == 82, "착지 후 다음 주기에 피해")
+	_expire_fires(b)
+	# E. 회피 무적: 예정 틱에 무적이면 건너뜀
+	b._spawn_fire(Vector2(500, 545))
+	idle(b, 30)
+	p.invuln_ticks = 3
+	idle(b, 1)
+	check(p.hp == 82, "예정 틱에 무적(회피) → 건너뜀")
+	_expire_fires(b)
+	# F. 공격 중 피해: 경직·히트스톱·행동 취소 없음
+	b._spawn_fire(Vector2(500, 545))
+	idle(b, 27)
+	press(b, "attack_light")
+	idle(b, 2)
+	check(p.state == &"light" and p.hp == 82, "평타 진행 중, 아직 피해 없음")
+	idle(b, 1)
+	check(p.hp == 79 and p.state == &"light" and p.hitstop_ticks == 0 and p.hitstun_ticks == 0, "평타 중 불 피해 3: 경직·히트스톱·취소 없음 (%s)" % p.state)
+	# G. 적은 자기 불에 피해 없음 (평타가 끝난 뒤 생성)
+	idle(b, 30)
+	var e := b.spawn_melee_enemy(Vector2(500, 545))
+	e.state = &"idle"
+	e.state_ticks = -100000
+	var ehp := e.hp
+	for i in 70:
+		b.step(PlayerInput.make())
+		place(e, 500, 545)
+		e.state = &"idle"
+		e.state_ticks = -100000
+	check(e.hp == ehp, "적은 불 피해 없음")
+	# H. 방 이동 시 시계·불 정리
+	check(not b.fire_clocks.is_empty(), "이동 전 시계 존재")
+	e.queue_free()
+	b.enemies.erase(e)
+	place(p, 300, 545)
+	p.change_state(&"ground")
+	idle(b, 5)
+	enter(b, &"battle_1")
+	check(b.fires.is_empty() and b.fire_clocks.is_empty(), "방 이동 후 불·시계 없음")
+	b.queue_free()
+
+func _expire_fires(b: Battle) -> void:
+	for fz in b.fires:
+		fz.age = fz.life_ticks
+	idle(b, 1)
+
+## 7. 동료 화염 우회/피격/이탈, 일반 방 또는 보스의 마지막 처치를 동료가 해도 올바른 결과
+func test_d7_companion_avoids_fire_and_last_kill_results() -> void:
+	var b: Battle = await make_battle()
+	var farm := data.site(&"ch1_farm")
+	var aya := data.companion(&"aya")
+	b.start_encounter(farm, "run_comp_fire", aya, 20.0, 100)
+	settle(b)
+	var p := b.player
+	var comp: ArcherCompanion = b.companion
+	# 불 안에 서 있으면 빠져나온다
+	place(p, 700, 545)
+	p.facing = 1
+	place(comp, 500, 545)
+	b._spawn_fire(Vector2(500, 545))
+	var escaped_tick := -1
+	for i in 60:
+		b.step(PlayerInput.make())
+		if not b.is_in_fire(comp.floor_pos) and escaped_tick < 0:
+			escaped_tick = i
+	check(escaped_tick >= 0 and escaped_tick < 30 and comp.total_damage_taken == 0, "불 안의 동료가 %d틱에 탈출, 피해 0" % escaped_tick)
+	idle(b, 60)
+	check(not b.is_in_fire(comp.floor_pos), "탈출 후 불 위에 정지하지 않음")
+	# 따라가기 목표가 불 안이면 안전한 위치를 고른다
+	for fz in b.fires:
+		fz.age = fz.life_ticks
+	idle(b, 2)
+	place(p, 700, 545)
+	p.facing = 1
+	place(comp, 600, 545)
+	b._spawn_fire(Vector2(600, 545))   # 정확히 따라가기 위치(700-100)
+	var in_fire_ticks := 0
+	for i in 240:
+		b.step(PlayerInput.make())
+		if b.is_in_fire(comp.floor_pos):
+			in_fire_ticks += 1
+	check(in_fire_ticks < 30 and comp.total_damage_taken <= 3, "목표 지점의 불을 피해 대기 (불 위 %d틱, 피해 %d)" % [in_fire_ticks, comp.total_damage_taken])
+	# 경로의 불을 우회: 동료 (300) → 목표 (600), 불 (450)
+	for fz in b.fires:
+		fz.age = fz.life_ticks
+	idle(b, 2)
+	comp.total_damage_taken = 0
+	comp.hp = comp.max_hp
+	place(comp, 300, 545)
+	place(p, 700, 545)
+	b._spawn_fire(Vector2(450, 545))
+	for i in 240:
+		b.step(PlayerInput.make())
+	check(comp.total_damage_taken == 0 and comp.floor_pos.x > 520.0, "경로의 불을 우회해 도착 (x %.0f, 피해 %d)" % [comp.floor_pos.x, comp.total_damage_taken])
+	# 동료 피격·이탈
+	place(comp, 500, 545)
+	b._spawn_fire(Vector2(500, 545))
+	comp.hp = 2
+	for i in 80:
+		b.step(PlayerInput.make())
+		place(comp, 500, 545)
+		if not comp.alive:
+			break
+	check(not comp.alive and not comp.visible and b.result_state == &"active", "불 피해로 동료 이탈, 패배 아님")
+	b.queue_free()
+	# 마지막 처치를 동료가: 일반 방 → 정리, 보스 → 승리
+	var b2: Battle = await make_battle()
+	b2.start_encounter(farm, "run_comp_last", aya, 20.0, 100)
+	settle(b2)
+	enter(b2, &"battle_1")
+	var comp2: ArcherCompanion = b2.companion
+	flush_spawns(b2)
+	var alive := b2.alive_enemies()
+	for i in range(1, alive.size()):
+		kill(alive[i])
+	var last := alive[0]
+	last.hp = 5
+	place(b2.player, 250, 545)
+	b2.player.invuln_ticks = 100000
+	place(last, 700, 545)
+	place(comp2, 450, 545)
+	comp2.cooldown_ticks = 0
+	var cleared := [0]
+	var resolved := [0]
+	b2.room_cleared.connect(func(_r): cleared[0] += 1)
+	b2.resolved.connect(func(_o, _r): resolved[0] += 1)
+	for i in 200:
+		b2.step(PlayerInput.make())
+		last.state = &"idle"
+		last.state_ticks = -100000
+		if not last.alive:
+			break
+	check(not last.alive and comp2.shots_fired >= 1, "동료 화살로 1웨이브 마지막 처치")
+	idle(b2, 1)
+	check(b2.doors_locked and cleared[0] == 0 and b2.wave_index == 1, "1웨이브 뒤에는 정리 아님(간격 뒤 2웨이브)")
+	clear_room(b2)
+	check(cleared[0] == 1 and resolved[0] == 0, "방 정리 1회, 승리 아님")
+	enter(b2, &"battle_2")
+	clear_room(b2)
+	enter(b2, &"battle_3")
+	clear_room(b2)
+	enter(b2, &"boss")
+	flush_spawns(b2)
+	var boss := b2.boss_enemy()
+	boss.hp = 5
+	place(boss, 700, 545)
+	boss.change_state(&"idle")
+	place(b2.player, 250, 545)
+	place(comp2, 450, 545)
+	comp2.cooldown_ticks = 0
+	for i in 200:
+		b2.step(PlayerInput.make())
+		if b2.result_state != &"active":
+			break
+		boss.change_state(&"idle")
+		place(boss, 700, 545)
+	check(not boss.alive and b2.result_state == &"resolved" and b2.outcome == &"victory" and resolved[0] == 1, "동료 화살로 보스 처치 → 승리 1회")
+	b2.queue_free()
+
+## 8. 상자 1회, 생존자만 20% 회복, 최초 130/반복 50(미개봉 100/20), 패배·포기 0, 저장 실패 재시도 중복 없음
 func test_d8_chest_once_heal_pending_and_rewards() -> void:
 	var c := make_controller()
 	c.new_game()
@@ -1253,6 +1745,106 @@ func test_scenario_12_dev_keys_ignored_in_campaign() -> void:
 	Input.action_release(&"dev_reset_player")
 	check(t.player.hp == t.player.max_hp, "수련장에서 F6 동작")
 	t.queue_free()
+
+# ------------------------------------------------------------------ 실전 자동 플레이(측정용)
+
+## 단순 자동 조작: 방이 잠기면 대상에게 붙어 평타, 불 위면 빠져나옴, 방이 열리면 다음 문으로 이동(보물방 생략).
+## strategy: "nearest" (가까운 적) / "ranged_first" (궁수·투척병 우선)
+func auto_play(b: Battle, strategy: String, max_ticks: int = 60 * 300) -> Dictionary:
+	var p := b.player
+	var ticks := 0
+	var toggle := false
+	var order: Array[StringName] = [&"entry", &"battle_1", &"battle_2", &"battle_3", &"boss"]
+	while b.result_state == &"active" and ticks < max_ticks:
+		ticks += 1
+		var move := Vector2.ZERO
+		var actions: Array = []
+		if b.transition_ticks > 0:
+			b.step(PlayerInput.make())
+			continue
+		if b.doors_locked:
+			var target: EnemyBase = _auto_target(b, strategy)
+			var fz := b.fire_at(p.floor_pos)
+			if fz != null:
+				move.y = -1.0 if p.floor_pos.y <= fz.center.y else 1.0
+				if p.floor_pos.y - 45.0 < b.arena_rect().position.y:
+					move.y = 1.0
+				elif p.floor_pos.y + 45.0 > b.arena_rect().end.y:
+					move.y = -1.0
+			elif target != null:
+				var dx := target.floor_pos.x - p.floor_pos.x
+				var dy := target.floor_pos.y - p.floor_pos.y
+				if absf(dy) > 8.0:
+					move.y = signf(dy)
+				if absf(dx) > 75.0:
+					move.x = signf(dx)
+				elif (dx > 0.0) != (p.facing > 0) and p.state == &"ground":
+					move.x = signf(dx)
+				if absf(dx) <= 95.0 and absf(dy) <= 14.0:
+					actions.append("attack_light")
+				if move.x != 0.0:
+					var ahead := p.floor_pos + Vector2(move.x * 45.0, move.y * 10.0)
+					var f2 := b.fire_at(ahead)
+					if f2 != null:
+						move.x = 0.0
+						move.y = -1.0 if p.floor_pos.y <= f2.center.y else 1.0
+		else:
+			var idx := order.find(b.room.id)
+			var next: StringName = order[mini(idx + 1, order.size() - 1)]
+			var dir := door_dir_to(b, next)
+			if dir != &"":
+				var z := b.door_zone(dir)
+				if z.has_point(p.floor_pos):
+					toggle = not toggle
+					if toggle:
+						actions.append("interact")
+				else:
+					var d := z.get_center() - p.floor_pos
+					if absf(d.x) > 6.0:
+						move.x = signf(d.x)
+					if absf(d.y) > 6.0:
+						move.y = signf(d.y)
+		b.step(PlayerInput.make(move, actions))
+	var rooms := {}
+	var total_damage := 0
+	for rid in b.run_stats.keys():
+		var st: Dictionary = b.run_stats[rid]
+		rooms[rid] = st.duplicate()
+		total_damage += int(st.damage_taken)
+	return {"ticks": ticks, "outcome": String(b.outcome), "hp": p.hp, "max_hp": p.max_hp, "damage": total_damage, "kills": b.kills, "rooms": rooms}
+
+func _auto_target(b: Battle, strategy: String) -> EnemyBase:
+	var p := b.player
+	var best: EnemyBase = null
+	var best_d := INF
+	var ranged_exists := false
+	if strategy == "ranged_first":
+		for e in b.alive_enemies():
+			if e is ArcherEnemy or e is ThrowerEnemy:
+				ranged_exists = true
+	for e in b.alive_enemies():
+		if ranged_exists and not (e is ArcherEnemy or e is ThrowerEnemy):
+			continue
+		var d: float = absf(e.floor_pos.x - p.floor_pos.x) + absf(e.floor_pos.y - p.floor_pos.y)
+		if d < best_d:
+			best_d = d
+			best = e
+	return best
+
+func test_real_fight_three_sites_two_strategies() -> void:
+	for site_id in [&"ch1_farm", &"ch1_store", &"ch1_pass"]:
+		for strategy in ["nearest", "ranged_first"]:
+			var b: Battle = await make_battle()
+			b.start_encounter(data.site(site_id), "run_auto_%s_%s" % [site_id, strategy], null, 20.0, 100)
+			var r := auto_play(b, strategy)
+			check(r.outcome != "", "%s/%s: 5분 안에 결과 확정 (%s, %d틱)" % [site_id, strategy, r.outcome, r.ticks])
+			var parts: Array[String] = []
+			for rid in [&"battle_1", &"battle_2", &"battle_3", &"boss"]:
+				var st: Dictionary = r.rooms.get(rid, {"combat_ticks": 0, "damage_taken": 0, "kills": 0})
+				parts.append("%s %.1f초/피해%d/처치%d" % [rid, int(st.combat_ticks) / 60.0, int(st.damage_taken), int(st.kills)])
+			fight_reports.append("%s [%s] %s %.1f초 체력 %d/%d 받은 피해 %d 처치 %d | %s" % [site_id, strategy, r.outcome, r.ticks / 60.0, r.hp, r.max_hp, r.damage, r.kills, " · ".join(parts)])
+			b.queue_free()
+			await process_frame
 
 # ------------------------------------------------------------------ 화면 흐름
 
