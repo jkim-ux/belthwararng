@@ -11,6 +11,8 @@ const PROFILE_LEGACY_PATH := "res://data/profiles/m1_legacy.tres"
 const PROFILE_R1_PATH := "res://data/profiles/r1_momentum.tres"
 
 signal hit_applied(attacker: BattleActor, target: BattleActor, info: HitInfo)
+signal resolved(outcome: StringName, run_id: String)     ## 캠페인 전투 결과(한 run 에 한 번)
+signal wave_started(index: int, total: int)
 
 @export var tuning: CombatTuning
 @export var manual_step: bool = false        ## true 면 _physics_process 가 진행하지 않는다(테스트용)
@@ -37,6 +39,19 @@ var hits_this_run: int = 0
 var profiles: Array[CombatProfile] = []
 var profile_index: int = 1                   ## 기본은 새 모멘텀 R1
 var profile_switch_message: String = ""
+
+# 캠페인 전투
+var encounter: SiteDef
+var run_id: String = ""
+var wave_index: int = 0                      ## 다음에 출현할 묶음 인덱스
+var pending_spawns: Array = []               ## [{kind, pos, ticks, marker}]
+var result_state: StringName = &"active"     ## active → resolved (committed 는 캠페인 컨트롤러가 처리)
+var outcome: StringName = &""
+var attack_slot_holders: Array = []          ## 공격 허가를 가진 적
+var companion_def: CompanionDef
+var companion: BattleActor
+var projectiles: Array = []
+var kills: int = 0
 
 # 개발용 자동 시연/스크린샷
 var _screenshot_path: String = ""
@@ -138,8 +153,33 @@ func spawn_melee_enemy(at: Vector2) -> MeleeEnemy:
 	var e := MeleeEnemy.new()
 	actors_root.add_child(e)
 	e.configure(tuning, self, at, player)
+	e.died.connect(_on_enemy_died)
 	enemies.append(e)
 	return e
+
+func spawn_captain(at: Vector2) -> CaptainEnemy:
+	var e := CaptainEnemy.new()
+	actors_root.add_child(e)
+	e.configure(tuning, self, at, player)
+	e.died.connect(_on_enemy_died)
+	enemies.append(e)
+	return e
+
+func spawn_enemy_kind(kind: StringName, at: Vector2) -> EnemyBase:
+	# 플레이어와 바로 겹치지 않게 등장 위치를 보정한다.
+	var r := arena_rect()
+	if absf(at.x - player.floor_pos.x) < 120.0 and absf(at.y - player.floor_pos.y) < 40.0:
+		at.x = clampf(at.x + 160.0, r.position.x + 40.0, r.end.x - 40.0)
+	at.x = clampf(at.x, r.position.x + 30.0, r.end.x - 30.0)
+	at.y = clampf(at.y, r.position.y, r.end.y)
+	match kind:
+		&"captain":
+			return spawn_captain(at)
+		_:
+			return spawn_melee_enemy(at)
+
+func _on_enemy_died(_actor: BattleActor) -> void:
+	kills += 1
 
 ## 수련장 전용: 플레이어 위치·체력 초기화 (F6).
 func reset_player() -> void:
@@ -177,6 +217,8 @@ func _handle_dev_input() -> void:
 
 ## 한 틱 진행. 테스트는 이 함수를 직접 호출한다.
 func step(inp: PlayerInput) -> void:
+	if result_state != &"active":
+		return
 	tick += 1
 	player.step_with_input(inp)
 	for a in allies:
@@ -185,12 +227,195 @@ func step(inp: PlayerInput) -> void:
 	for e in enemies:
 		if is_instance_valid(e):
 			e.step()
+	_step_projectiles()
 	_resolve_hits()
+	_resolve_projectiles()
 	_after_tick()
 
-## 하위 장면(캠페인)이 웨이브·승패 처리를 덧붙인다.
+## 캠페인: 출현 예고·묶음 진행·승패 판정. 한 틱의 이동·공격·투사체·피격 처리가 끝난 뒤 판단한다.
 func _after_tick() -> void:
-	pass
+	_clean_attack_slots()
+	if mode != &"campaign" or encounter == null:
+		return
+	_step_spawns()
+	# 같은 틱에 주인공 사망과 마지막 적 사망이 함께 확인되면 패배를 우선한다.
+	if not player.alive:
+		_resolve(&"defeat")
+		return
+	if required_alive_count() == 0 and pending_spawns.is_empty():
+		if wave_index < encounter.waves.size():
+			_queue_wave(wave_index)
+		else:
+			_resolve(&"victory")
+
+func required_alive_count() -> int:
+	var n := 0
+	for e in enemies:
+		if is_instance_valid(e) and e.alive and e.required_for_victory:
+			n += 1
+	return n
+
+func remaining_waves() -> int:
+	return encounter.waves.size() - wave_index if encounter != null else 0
+
+# ---------------------------------------------------------------- 캠페인 전투
+
+## 거점 전투 시작. mode 는 add_child 전에 &"campaign" 으로 두어야 한다.
+func start_encounter(site: SiteDef, p_run_id: String, comp: CompanionDef, attack_power: float, max_hp: int) -> void:
+	encounter = site
+	run_id = p_run_id
+	wave_index = 0
+	kills = 0
+	result_state = &"active"
+	outcome = &""
+	player.reset_to(site.player_start)
+	player.attack_power = attack_power
+	player.max_hp = max_hp
+	player.hp = max_hp
+	companion_def = comp
+	if comp != null and comp.implemented:
+		_spawn_companion(comp)
+	log_event("%s 출정" % site.display_name)
+	_queue_wave(0)
+
+func _spawn_companion(comp: CompanionDef) -> void:
+	if comp.id != &"aya":
+		return
+	var c := ArcherCompanion.new()
+	c.name = "Companion"
+	actors_root.add_child(c)
+	c.configure(tuning, self, player.floor_pos + Vector2(-comp.follow_distance, 20.0), comp, player)
+	c.hit_taken.connect(_on_actor_hit)
+	allies.append(c)
+	companion = c
+
+func _queue_wave(index: int) -> void:
+	if encounter == null or index >= encounter.waves.size():
+		return
+	var w: EncounterWave = encounter.waves[index]
+	wave_index = index + 1
+	var delay := Ticks.from_ms(w.spawn_delay_ms)
+	for i in w.enemy_kinds.size():
+		var pos: Vector2 = w.spawn_positions[i] if i < w.spawn_positions.size() else Vector2(1000, 560 + 40 * i)
+		var marker := SpawnMarker.new()
+		marker.ticks_total = delay
+		marker.ticks_left = delay
+		marker.position = pos
+		fx_root.add_child(marker)
+		pending_spawns.append({"kind": w.enemy_kinds[i], "pos": pos, "ticks": delay, "marker": marker})
+	wave_started.emit(index + 1, encounter.waves.size())
+	log_event("적 묶음 %d/%d 출현 예고" % [index + 1, encounter.waves.size()])
+
+func _step_spawns() -> void:
+	var remaining: Array = []
+	for sp in pending_spawns:
+		sp.ticks -= 1
+		if is_instance_valid(sp.marker):
+			sp.marker.ticks_left = sp.ticks
+		if sp.ticks <= 0:
+			if is_instance_valid(sp.marker):
+				sp.marker.queue_free()
+			spawn_enemy_kind(sp.kind, sp.pos)
+		else:
+			remaining.append(sp)
+	pending_spawns = remaining
+
+## 결과 확정: 한 run 에 한 번. 남은 판정·투사체를 지워 결과 창 뒤에서 피해가 나지 않게 한다.
+func _resolve(p_outcome: StringName) -> void:
+	if result_state != &"active":
+		return
+	result_state = &"resolved"
+	outcome = p_outcome
+	for a in all_actors():
+		a.end_hitboxes()
+	for pr in projectiles:
+		if is_instance_valid(pr):
+			pr.finish()
+	projectiles.clear()
+	for sp in pending_spawns:
+		if is_instance_valid(sp.marker):
+			sp.marker.queue_free()
+	pending_spawns.clear()
+	player.clear_buffer()
+	log_event("승리" if p_outcome == &"victory" else ("패배" if p_outcome == &"defeat" else "출정 포기"))
+	resolved.emit(p_outcome, run_id)
+
+## 출정 포기(캠페인). 보상 없이 결과를 확정한다.
+func abandon() -> void:
+	if mode == &"campaign":
+		_resolve(&"abandon")
+
+# ---------------------------------------------------------------- 공격 허가 (근접 적 동시 공격자 제한)
+
+func request_attack_slot(e: BattleActor) -> bool:
+	_clean_attack_slots()
+	if attack_slot_holders.has(e):
+		return true
+	if attack_slot_holders.size() >= tuning.max_concurrent_attackers:
+		return false
+	attack_slot_holders.append(e)
+	return true
+
+func release_attack_slot(e: BattleActor) -> void:
+	attack_slot_holders.erase(e)
+
+func _clean_attack_slots() -> void:
+	var keep: Array = []
+	for e in attack_slot_holders:
+		if is_instance_valid(e) and e.alive:
+			keep.append(e)
+	attack_slot_holders = keep
+
+# ---------------------------------------------------------------- 투사체
+
+func add_projectile(pr: Projectile) -> void:
+	fx_root.add_child(pr)
+	projectiles.append(pr)
+
+func _step_projectiles() -> void:
+	var r := arena_rect()
+	var keep: Array = []
+	for pr in projectiles:
+		if not is_instance_valid(pr) or not pr.alive:
+			continue
+		pr.step(r)
+		if pr.alive:
+			keep.append(pr)
+	projectiles = keep
+
+## 투사체 판정: 좌우·깊이·높이를 대상과 비교한다. 아군은 관통, 명중 시 단일 대상 피해 후 제거.
+func _resolve_projectiles() -> void:
+	var actors := all_actors()
+	var keep: Array = []
+	for pr in projectiles:
+		if not is_instance_valid(pr) or not pr.alive:
+			continue
+		for target in actors:
+			if target.team == pr.team or not target.can_be_hit():
+				continue
+			if not _ranges_overlap(pr.x_range(), target.hurt_x_range()):
+				continue
+			if not _ranges_overlap(pr.y_range(), target.hurt_y_range()):
+				continue
+			if not _ranges_overlap(pr.z_range(), target.hurt_z_range()):
+				continue
+			var info := HitInfo.new()
+			info.attacker = pr.shooter
+			info.attack = pr.attack
+			info.damage = pr.damage
+			info.hitstop_ticks = 0
+			info.direction = pr.facing
+			if target.receive_hit(info):
+				hits_this_run += 1
+				hit_applied.emit(pr.shooter, target, info)
+				_spawn_damage_number(target, info)
+				_spawn_hit_flash(target, info)
+				log_event("%s → %s %d" % [pr.shooter.display_name if pr.shooter else "화살", target.display_name, roundi(info.damage)])
+				pr.finish()
+				break
+		if pr.alive:
+			keep.append(pr)
+	projectiles = keep
 
 func all_actors() -> Array[BattleActor]:
 	var out: Array[BattleActor] = [player]

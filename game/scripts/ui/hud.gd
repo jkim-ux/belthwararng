@@ -15,7 +15,44 @@ func _process(_delta: float) -> void:
 func _zone_text() -> String:
 	if battle.mode == &"training":
 		return "구역: 수련장 (프로필 비교)"
+	if battle.encounter != null:
+		return "구역: %s" % battle.encounter.display_name
 	return "구역: 거점 전투"
+
+func _draw_campaign(f: Font) -> void:
+	# 목표·적 등장 상태
+	var remaining := battle.required_alive_count()
+	var waves_left := battle.remaining_waves()
+	var txt := "남은 적 %d" % remaining
+	if not battle.pending_spawns.is_empty():
+		txt += "  (출현 중 %d)" % battle.pending_spawns.size()
+	if waves_left > 0:
+		txt += "  다음 묶음 %d" % waves_left
+	draw_string(f, Vector2(900, 36), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 0.9, 0.6))
+	# 동료 체력
+	if battle.companion != null and is_instance_valid(battle.companion):
+		var c := battle.companion
+		draw_rect(Rect2(20, 120, 220, 20), Color(0, 0, 0, 0.55))
+		if c.alive:
+			draw_rect(Rect2(22, 122, 216 * float(c.hp) / float(maxi(1, c.max_hp)), 16), Color(0.4, 0.9, 0.5))
+			draw_string(f, Vector2(26, 135), "%s  %d / %d" % [c.display_name, c.hp, c.max_hp], HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color.WHITE)
+		else:
+			draw_string(f, Vector2(26, 135), "%s  이탈 (다음 출정에서 회복)" % c.display_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1, 0.7, 0.7))
+	# 대장 체력·예고
+	for e in battle.enemies:
+		if e is CaptainEnemy and is_instance_valid(e) and e.alive:
+			draw_rect(Rect2(340, 100, 600, 22), Color(0, 0, 0, 0.6))
+			draw_rect(Rect2(342, 102, 596 * float(e.hp) / float(maxi(1, e.max_hp)), 18), Color(0.85, 0.2, 0.25))
+			var pat := ""
+			if e.state == &"telegraph":
+				pat = "  예고: %s" % ("전방 베기" if e.current_pattern == 0 else "직선 돌진 — 옆으로 피하라")
+			elif e.state == &"attack":
+				pat = "  공격!"
+			draw_string(f, Vector2(348, 117), "%s  %d / %d%s" % [e.display_name, e.hp, e.max_hp, pat], HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color.WHITE)
+	if battle.result_state != &"active":
+		return
+	if not battle.player.alive:
+		draw_string(f, Vector2(480, 200), "쓰러졌다", HORIZONTAL_ALIGNMENT_LEFT, -1, 30, Color(1, 0.5, 0.5))
 
 func _draw() -> void:
 	if battle == null or battle.player == null:
@@ -28,8 +65,8 @@ func _draw() -> void:
 	draw_rect(Rect2(23, 19, 334 * ratio, 20), Color(0.35, 0.85, 0.4) if ratio > 0.3 else Color(0.9, 0.3, 0.3))
 	draw_string(f, Vector2(28, 36), "%s  %d / %d" % [p.display_name, p.hp, p.max_hp], HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
 	draw_string(f, Vector2(380, 36), _zone_text(), HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 1, 1, 0.9))
-	if not p.alive:
-		draw_string(f, Vector2(480, 200), "쓰러졌다 — F6 으로 초기화" if battle.mode == &"training" else "쓰러졌다", HORIZONTAL_ALIGNMENT_LEFT, -1, 30, Color(1, 0.5, 0.5))
+	if not p.alive and battle.mode == &"training":
+		draw_string(f, Vector2(480, 200), "쓰러졌다 — F6 으로 초기화", HORIZONTAL_ALIGNMENT_LEFT, -1, 30, Color(1, 0.5, 0.5))
 	if battle.paused:
 		draw_string(f, Vector2(560, 300), "일시정지 (Esc)", HORIZONTAL_ALIGNMENT_LEFT, -1, 30, Color(1, 1, 1))
 	# --- 우상단: 조작 안내
@@ -48,6 +85,8 @@ func _draw() -> void:
 		draw_string(f, Vector2(20, y), line, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(1, 1, 1, 0.75))
 		y += 18.0
 	# --- 허수아비 누적 피해
+	if battle.mode == &"campaign":
+		_draw_campaign(f)
 	if battle.dummy != null and is_instance_valid(battle.dummy):
 		draw_string(f, Vector2(900, 36), "허수아비 누적 피해: %d" % battle.dummy.total_damage_taken, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 0.9, 0.6))
 	if battle.knockback_dummy != null and is_instance_valid(battle.knockback_dummy):

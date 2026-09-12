@@ -1,0 +1,27 @@
+[gd_resource type="Resource" script_class="CompanionDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/companion_def.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = &"shino"
+display_name = "유랑 무사 시노"
+role = "강공격 마무리"
+unlock_chapter_id = &"ch5"
+implemented = false
+description = "챕터 5 클리어(엔딩) 후 재도전에서 합류 예정. 포로선의 주민을 구출한 유랑 무사."
+join_text = ""
+max_hp = 60
+attack_damage = 7.0
+fire_interval_ms = 1500
+aim_ms = 250
+attack_range = 360
+follow_distance = 100
+move_speed_x = 260
+move_speed_y = 170
+projectile_speed = 600
+projectile_max_distance = 360
+projectile_life_ms = 600
+projectile_height = 35
+projectile_half_height = 4
+projectile_half_depth = 4

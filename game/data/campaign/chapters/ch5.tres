@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="ChapterDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/chapter_def.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = &"ch5"
+index = 5
+display_name = "마지막 물결"
+prerequisite_chapter_id = &"ch4"
+site_ids = []
+reward_companion_id = &"shino"
+implemented = false
+summary = "해안·조선 마을·군항 탈환. 항구 개방, 섬의 점령 상태 해제. (콘텐츠 준비 중)"

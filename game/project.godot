@@ -12,7 +12,7 @@ config_version=5
 
 config/name="사무라이 점령전 (HWR-002)"
 config/description="사무라이 벨트스크롤 점령전 - 평타 모멘텀, 첫 챕터 3거점, 궁수 동료"
-run/main_scene="res://scenes/battle.tscn"
+run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 
 [display]

@@ -46,3 +46,21 @@ extends Resource
 @export var enemy_attack_reach: float = 80.0
 @export var enemy_down_ms: float = 600.0
 @export var enemy_getup_protect_ms: float = 500.0   ## 기상 보호(무적) 시간
+
+@export_group("거점 전투")
+@export var max_concurrent_attackers: int = 2      ## 근접 적 최대 동시 공격자(예고~회복 동안 허가 유지)
+
+@export_group("초소 대장")
+@export var captain_max_hp: int = 600
+@export var captain_attack_damage: int = 12
+@export var captain_slash_telegraph_ms: float = 600.0
+@export var captain_slash_active_ms: float = 100.0
+@export var captain_slash_recover_ms: float = 800.0
+@export var captain_slash_reach: float = 110.0
+@export var captain_charge_telegraph_ms: float = 800.0
+@export var captain_charge_active_ms: float = 300.0   ## 이동 타격 구간
+@export var captain_charge_recover_ms: float = 1000.0
+@export var captain_charge_distance: float = 300.0
+@export var captain_flinch_ms: float = 120.0          ## 대기·접근 중 피격 시 짧은 경직
+@export var captain_speed_x: float = 120.0
+@export var captain_speed_y: float = 90.0

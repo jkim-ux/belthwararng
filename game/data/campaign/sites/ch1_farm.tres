@@ -1,0 +1,49 @@
+[gd_resource type="Resource" script_class="SiteDef" load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/site_def.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/data/encounter_wave.gd" id="2"]
+[ext_resource type="Script" path="res://scripts/data/facility_def.gd" id="3"]
+
+[sub_resource type="Resource" id="wave1"]
+script = ExtResource("2")
+enemy_kinds = [&"melee", &"melee"]
+spawn_positions = [Vector2(980, 560), Vector2(1080, 630)]
+spawn_delay_ms = 700
+
+[sub_resource type="Resource" id="wave2"]
+script = ExtResource("2")
+enemy_kinds = [&"melee", &"melee"]
+spawn_positions = [Vector2(1040, 520), Vector2(1120, 650)]
+spawn_delay_ms = 700
+
+[sub_resource type="Resource" id="facility"]
+script = ExtResource("3")
+id = &"training_ground"
+display_name = "훈련장"
+cost = 60
+effect_kind = &"attack_mult"
+value = 1.05
+description = "주인공 기본 공격력 +5% (20 기준 21)"
+villagers_text = "복구된 논밭의 주민이 식량과 연습 상대를 대며 훈련을 지원한다."
+
+[resource]
+script = ExtResource("1")
+id = &"ch1_farm"
+display_name = "징발당한 농촌"
+chapter_id = &"ch1"
+kind = &"village"
+implemented = true
+description = "점령군 징발대가 곡식을 빼앗는 농촌. 근접 적 2명씩 2묶음."
+prerequisite_site_id = &""
+prerequisite_management = 0
+waves = [SubResource("wave1"), SubResource("wave2")]
+player_start = Vector2(260, 560)
+first_reward = 100
+repeat_reward = 20
+management_on_liberate = 40
+management_on_repair = 60
+repair_cost = 40
+facility = SubResource("facility")
+scene_occupied = "적 깃발이 꽂히고 창고 문은 못질돼 있다. 주민은 숨어 지낸다."
+scene_liberated = "주민이 돌아와 새 깃발을 올렸다. 논밭은 아직 말라 있다."
+scene_repaired = "수로가 트이고 논밭이 푸르다. 주민이 밭일과 훈련 지원을 나눠 맡는다."

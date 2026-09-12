@@ -1,11 +1,14 @@
 class_name MeleeEnemy
 extends EnemyBase
-## 단순 근접 적: 접근 → 예고 → 공격 → 회복(물러남) → 대기.
-## 예고 시작 시점에 공격 방향을 고정한다. 깊이를 먼저 맞춘 뒤 좌우 거리를 좁힌다.
+## 단순 근접 적: 접근 → (공격 허가 대기) → 예고 → 공격 → 회복(물러남) → 대기.
+## 대기/접근 중에는 살아 있는 아군(주인공·동료) 중 가까운 대상을 고르고, 예고 시작 시점에 대상·방향을 고정한다.
+## 근접 적 최대 동시 공격자 수는 Battle 의 공격 허가(request_attack_slot)로 통제한다.
+## 깊이를 먼저 맞춘 뒤 좌우 거리를 좁힌다.
 
 var target: BattleActor
 var attack_data: AttackData
 var recover_backoff_ticks: int = 18
+var waiting_for_slot: bool = false     ## 허가 대기 중(표시용)
 
 func _init() -> void:
 	team = &"enemy"
@@ -34,7 +37,7 @@ func configure(p_tuning: CombatTuning, p_battle: Node, start: Vector2, p_target:
 	attack_data.depth_tolerance = 22.0
 	attack_data.z_min = -10.0
 	attack_data.z_max = 90.0
-	facing = -1 if start.x > p_target.floor_pos.x else 1
+	facing = -1 if (p_target != null and start.x > p_target.floor_pos.x) else 1
 	change_state(&"idle")
 
 func _step_state() -> void:
@@ -55,17 +58,39 @@ func _step_state() -> void:
 func _target_valid() -> bool:
 	return target != null and is_instance_valid(target) and target.alive
 
+## 살아 있는 아군 중 가까운 대상을 고른다(대기·접근 중에만 호출).
+func _pick_target() -> void:
+	if battle == null or not battle.has_method("alive_allies"):
+		return
+	var best: BattleActor = null
+	var best_d := INF
+	for a in battle.alive_allies():
+		var d: float = absf(a.floor_pos.x - floor_pos.x) + absf(a.floor_pos.y - floor_pos.y) * 1.5
+		if d < best_d:
+			best_d = d
+			best = a
+	if best != null:
+		target = best
+
 func _face_target() -> void:
 	if _target_valid():
 		facing = 1 if target.floor_pos.x >= floor_pos.x else -1
 
+func _release_slot() -> void:
+	waiting_for_slot = false
+	if battle != null and battle.has_method("release_attack_slot"):
+		battle.release_attack_slot(self)
+
 func _step_idle() -> void:
 	approach_velocity(Vector2.ZERO)
 	move_by_velocity()
-	if state_ticks >= Ticks.from_ms(tuning.enemy_idle_ms) and _target_valid():
-		change_state(&"approach")
+	if state_ticks >= Ticks.from_ms(tuning.enemy_idle_ms):
+		_pick_target()
+		if _target_valid():
+			change_state(&"approach")
 
 func _step_approach() -> void:
+	_pick_target()
 	if not _target_valid():
 		change_state(&"idle")
 		return
@@ -89,7 +114,13 @@ func _step_approach() -> void:
 	if absf(dy) <= 6.0 and absf(dx) <= 10.0:
 		velocity = Vector2.ZERO
 		_face_target()
-		change_state(&"telegraph")
+		# 공격 허가: 동시 공격자 제한. 허가가 없으면 제자리에서 대기한다.
+		var allowed := true
+		if battle != null and battle.has_method("request_attack_slot"):
+			allowed = battle.request_attack_slot(self)
+		waiting_for_slot = not allowed
+		if allowed:
+			change_state(&"telegraph")
 
 func _step_telegraph() -> void:
 	# 예고 중에는 방향과 위치를 고정한다.
@@ -117,6 +148,9 @@ func _step_recover() -> void:
 func _on_state_entered(new_state: StringName) -> void:
 	if new_state != &"attack":
 		end_hitboxes()
+	# 예고~회복 동안 허가를 유지하고 그 외(대기·피격·다운·사망)로 가면 반환한다.
+	if new_state != &"telegraph" and new_state != &"attack" and new_state != &"recover":
+		_release_slot()
 
 func _draw() -> void:
 	# 예고 표시: 바닥에 공격 범위를 그린다 (색과 형태 모두로 구분)
@@ -137,10 +171,14 @@ func _draw() -> void:
 func _draw_body() -> void:
 	super()
 	if alive and state == &"telegraph":
-		# 준비 동작: 머리 위 느낌표 대신 팔(막대)을 뒤로 젖힌다
+		# 준비 동작: 팔(막대)을 뒤로 젖힌다
 		var top := -height - body_height
 		draw_rect(Rect2(-facing * 34.0 - 6.0, top + 20.0, 12.0, 6.0), Color(1.0, 0.4, 0.1))
 	elif alive and state == &"attack":
 		var top := -height - body_height
 		var x0 := 0.0 if facing > 0 else -attack_data.reach_forward
 		draw_rect(Rect2(x0, top + 26.0, attack_data.reach_forward, 6.0), Color(1.0, 0.9, 0.2))
+	elif alive and waiting_for_slot and state == &"approach":
+		# 허가 대기: 머리 위 작은 점
+		var top := -height - body_height
+		draw_circle(Vector2(0, top - 20.0), 3.0, Color(1.0, 0.8, 0.4, 0.8))

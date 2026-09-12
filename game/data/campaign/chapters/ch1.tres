@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="ChapterDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/chapter_def.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = &"ch1"
+index = 1
+display_name = "꺼진 봉화"
+prerequisite_chapter_id = &""
+site_ids = [&"ch1_farm", &"ch1_store", &"ch1_pass"]
+reward_companion_id = &"aya"
+implemented = true
+summary = "농촌 징발대 제거 → 창고 확보 → 고개 초소 탈환. 논밭 복구, 창고 수리, 처음으로 봉화가 켜진다."

@@ -1,0 +1,49 @@
+[gd_resource type="Resource" script_class="SiteDef" load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/site_def.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/data/encounter_wave.gd" id="2"]
+[ext_resource type="Script" path="res://scripts/data/facility_def.gd" id="3"]
+
+[sub_resource type="Resource" id="wave1"]
+script = ExtResource("2")
+enemy_kinds = [&"melee", &"melee", &"melee"]
+spawn_positions = [Vector2(960, 540), Vector2(1060, 600), Vector2(1140, 660)]
+spawn_delay_ms = 700
+
+[sub_resource type="Resource" id="wave2"]
+script = ExtResource("2")
+enemy_kinds = [&"melee", &"melee", &"melee"]
+spawn_positions = [Vector2(1000, 500), Vector2(1080, 580), Vector2(1160, 640)]
+spawn_delay_ms = 700
+
+[sub_resource type="Resource" id="facility"]
+script = ExtResource("3")
+id = &"supply_depot"
+display_name = "보급창"
+cost = 60
+effect_kind = &"max_hp_add"
+value = 10
+description = "주인공 최대 체력 +10 (100 기준 110)"
+villagers_text = "수리한 창고에서 주민이 물자를 정리해 짐수레로 실어 나른다."
+
+[resource]
+script = ExtResource("1")
+id = &"ch1_store"
+display_name = "창고 마을"
+chapter_id = &"ch1"
+kind = &"village"
+implemented = true
+description = "보급로의 창고 마을. 근접 적 3명씩 2묶음."
+prerequisite_site_id = &"ch1_farm"
+prerequisite_management = 60
+waves = [SubResource("wave1"), SubResource("wave2")]
+player_start = Vector2(260, 560)
+first_reward = 100
+repeat_reward = 20
+management_on_liberate = 40
+management_on_repair = 60
+repair_cost = 40
+facility = SubResource("facility")
+scene_occupied = "창고 지붕이 무너지고 적 깃발 아래 짐수레가 압수돼 있다."
+scene_liberated = "주민이 돌아와 깃발을 바꿨다. 지붕은 아직 뚫려 있다."
+scene_repaired = "창고 지붕이 고쳐지고 짐수레가 다시 오간다."
