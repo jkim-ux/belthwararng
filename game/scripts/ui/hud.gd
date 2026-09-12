@@ -1,7 +1,8 @@
 class_name Hud
 extends Control
 ## 전투 정보 표시: 체력, 구역, 스킬 8칸과 재사용 시간, 회피 대기, 조작 안내.
-## 미구현 스킬은 회색으로 "미구현"이라 표시하고 사용 가능한 것처럼 보이지 않게 한다.
+## 미구현 스킬은 회색으로 "미구현"이라 표시하고 사용 가능한 것처럼 보이지 않게 한다(HWR-004: 8개 모두 구현).
+## HWR-004: 칸마다 짧은 역할 안내, 흘려받기 성공/실패, 일섬연무 타격 수, 강인병 무너짐/2연격/내려찍기, 보스 예고를 도형+문구로 표시한다.
 ## HWR-003: 우측 상단(여백 16px, 약 240×140)에 방 미니맵을 그린다. 남은 적/웨이브 문구는 상단 중앙으로 옮겼다.
 ## 미니맵은 던전의 같은 RoomDef 연결 데이터를 사용한다(격자 칸만 같고 문이 다른 상황이 없음).
 
@@ -84,14 +85,43 @@ func _draw_campaign(f: Font) -> void:
 			draw_rect(Rect2(342, 102, 596 * float(e.hp) / float(maxi(1, e.max_hp)), 18), Color(0.85, 0.2, 0.25))
 			var pat := ""
 			if e.state == &"telegraph":
-				pat = "  예고: %s" % ("전방 베기" if e.current_pattern == 0 else "직선 돌진 — 옆으로 피하라")
+				pat = "  예고: %s" % ("전방 베기 (E 가능)" if e.current_pattern == 0 else "직선 돌진 — 옆으로 피하라 (E 가능)")
 			elif e.state == &"attack":
 				pat = "  공격!"
+			elif e.state == &"recover":
+				pat = "  회복 — 공격 기회"
 			draw_string(f, Vector2(348, 117), "%s  %d / %d%s" % [e.display_name, e.hp, e.max_hp, pat], HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color.WHITE)
+	_draw_brute_status(f)
 	if battle.result_state != &"active":
 		return
 	if not battle.player.alive:
 		draw_string(f, Vector2(480, 200), "쓰러졌다", HORIZONTAL_ALIGNMENT_LEFT, -1, 30, Color(1, 0.5, 0.5))
+
+## 강인병 상태(상단 중앙 아래): 무너짐 남은 시간 / 2연격 단계 / 내려찍기 예고. 색만이 아니라 문구·도형으로 구분한다.
+func _draw_brute_status(f: Font) -> void:
+	var y := 78.0
+	for e in battle.enemies:
+		if not (e is BruteEnemy) or not is_instance_valid(e) or not e.alive:
+			continue
+		var br := e as BruteEnemy
+		var txt := ""
+		var col := Color(0.9, 0.85, 1.0)
+		if br.state == &"stagger":
+			txt = "강인병 자세 무너짐 %.1f초 — 지금 공격" % (Ticks.to_ms(br.stagger_remaining_ticks()) / 1000.0)
+			col = Color(0.6, 0.9, 1.0)
+		elif br.state == &"telegraph" or br.state == &"attack":
+			if br.current_pattern == 0:
+				txt = "강인병 전방 2연격 %d/2 (E 로 한 타 방어 가능)" % mini(2, br.combo_stage() + 1)
+			else:
+				txt = "강인병 주변 내려찍기 — 범위 밖으로 (반격 불가)"
+			col = Color(1.0, 0.75, 0.6)
+		elif br.state == &"approach" or br.state == &"idle":
+			txt = "강인병 접근 중 — 공격을 버틴다. Q 로 무너뜨리기"
+		if txt != "":
+			var w := f.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x
+			draw_rect(Rect2(700 - 6, y - 14, w + 12, 20), Color(0, 0, 0, 0.45))
+			draw_string(f, Vector2(700, y), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, col)
+			y += 22.0
 
 ## 우측 상단 방 미니맵: 현재 방 테두리/점, 미방문 흐림, 방문, 정리 체크, 잠긴 문 자물쇠/막힌 선, 열린 문 연결선, 보스 B, 보물 ?/상자.
 func _draw_minimap(f: Font) -> void:
@@ -205,7 +235,7 @@ func _draw() -> void:
 	# --- 우상단: 조작 안내
 	var help := [
 		"방향키 이동   X 평타   C 점프(공중 평타 1회)   Space 회피",
-		"A 돌진베기   S 올려베기   (D F Q W E R 미구현)",
+		"A 돌진베기  S 올려베기  D 내려베기  F 회전베기  Q 방어깨기  W 검기  E 흘려받기  R 일섬연무 (모두 지상)",
 	]
 	if battle.mode == &"campaign":
 		help.append("Enter 문 이동 / 상자 열기 (지상에서)   Esc 일시정지")
@@ -246,13 +276,38 @@ func _draw() -> void:
 		else:
 			var cd: int = p.cooldown_for(sd)
 			var total: int = sd.cooldown_ticks()
+			if sd.hint != "":
+				draw_string(f, r.position + Vector2(8, 37), sd.hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.8, 0.8, 0.75))
 			if cd > 0:
 				var frac := float(cd) / float(maxi(1, total))
 				draw_rect(Rect2(r.position.x, r.position.y + r.size.y * (1.0 - frac), r.size.x, r.size.y * frac), Color(0, 0, 0, 0.55))
-				draw_string(f, r.position + Vector2(8, 50), "%.1f 초" % (Ticks.to_ms(cd) / 1000.0), HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(1, 0.6, 0.6))
+				draw_string(f, r.position + Vector2(8, 54), "%.1f 초" % (Ticks.to_ms(cd) / 1000.0), HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(1, 0.6, 0.6))
 			else:
-				draw_string(f, r.position + Vector2(8, 50), "준비됨  (재사용 %.0f초)" % (sd.cooldown_ms / 1000.0), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.6, 1.0, 0.6))
+				draw_string(f, r.position + Vector2(8, 54), "준비됨 (%.0f초)" % (sd.cooldown_ms / 1000.0), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.6, 1.0, 0.6))
+			# 현재 시전 중인 칸 강조
+			if p.current_skill == sd and (p.state == &"skill" or p.state == &"guard"):
+				draw_rect(r, Color(1.0, 0.95, 0.5), false, 3.0)
 		i += 1
+	# 흘려받기 결과·일섬연무 타격 수(스킬 칸 위, 도형+문구)
+	if p.guard_fx_ticks > 0 and p.last_guard_result != "":
+		var ok := p.last_guard_result.ends_with("성공")
+		var gx := x0 + 220.0
+		draw_rect(Rect2(gx, y0 - 30, 210, 22), Color(0, 0, 0, 0.5))
+		if ok:
+			draw_line(Vector2(gx + 8, y0 - 19), Vector2(gx + 14, y0 - 13), Color(0.5, 0.9, 1.0), 3.0)
+			draw_line(Vector2(gx + 14, y0 - 13), Vector2(gx + 24, y0 - 26), Color(0.5, 0.9, 1.0), 3.0)
+		else:
+			draw_line(Vector2(gx + 8, y0 - 26), Vector2(gx + 22, y0 - 12), Color(1.0, 0.6, 0.5), 3.0)
+			draw_line(Vector2(gx + 8, y0 - 12), Vector2(gx + 22, y0 - 26), Color(1.0, 0.6, 0.5), 3.0)
+		draw_string(f, Vector2(gx + 30, y0 - 14), p.last_guard_result, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0.6, 0.9, 1.0) if ok else Color(1.0, 0.7, 0.6))
+	if p.state == &"skill" and p.current_attack != null and p.current_attack.multi_hits > 0:
+		var n: int = p.multi_fired.size()
+		var rx := x0 + 440.0
+		draw_rect(Rect2(rx, y0 - 30, 150, 22), Color(0, 0, 0, 0.5))
+		for k in p.current_attack.multi_hits:
+			var c := Color(1.0, 0.9, 0.4) if k < n else Color(0.4, 0.4, 0.4)
+			draw_circle(Vector2(rx + 12 + k * 14, y0 - 19), 5.0, c)
+		draw_string(f, Vector2(rx + 84, y0 - 14), "연무 %d/%d" % [n, p.current_attack.multi_hits], HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1, 0.95, 0.7))
 	# --- 회피 대기
 	var dr := Rect2(x0, y0 - 30, 200, 22)
 	draw_rect(dr, Color(0, 0, 0, 0.5))

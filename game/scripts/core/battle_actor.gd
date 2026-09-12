@@ -149,7 +149,7 @@ func receive_hit(info: HitInfo) -> bool:
 	var dmg := maxi(1, roundi(info.damage))
 	hp = maxi(0, hp - dmg)
 	total_damage_taken += dmg
-	hitstop_ticks = maxi(hitstop_ticks, info.hitstop_ticks)
+	hitstop_ticks = maxi(hitstop_ticks, _victim_hitstop(info))
 	_on_hit(info)
 	hit_taken.emit(self, info)
 	if hp <= 0 and max_hp > 0:
@@ -158,6 +158,10 @@ func receive_hit(info: HitInfo) -> bool:
 
 func _on_hit(_info: HitInfo) -> void:
 	pass
+
+## 피격 대상 쪽 타격 정지. 기본은 공격의 값이며 강인병(항상 0)·보스(패턴 중 0)가 재정의한다. 공격자 쪽 정지와 별개다.
+func _victim_hitstop(info: HitInfo) -> int:
+	return info.hitstop_ticks
 
 ## 지속 피해(바닥 불): 경직·밀림·타격 정지·현재 행동 취소 없이 체력·무적·사망만 처리한다. 적용한 피해를 돌려준다.
 func receive_burn(dmg: int) -> int:
@@ -181,13 +185,17 @@ func _die() -> void:
 	change_state(&"dead")
 	died.emit(self)
 
-func begin_hitbox(attack: AttackData, damage: float) -> HitBox:
+func begin_hitbox(attack: AttackData, damage: float, hit_index: int = 0) -> HitBox:
 	var hs := Ticks.from_ms(tuning.hitstop_strong_ms if attack.strong else tuning.hitstop_light_ms)
 	var hb := HitBox.new(self, team, attack, damage, hs, facing)
+	hb.hit_index = hit_index
 	active_hitboxes.append(hb)
 	return hb
 
+## 판정을 거둔다. 이미 복사된 배열(Battle 의 순회)에서도 적용되지 않도록 취소 표시를 남긴다.
 func end_hitboxes() -> void:
+	for hb in active_hitboxes:
+		hb.cancelled = true
 	active_hitboxes.clear()
 
 # --- 그리기 (임시 도형) ---

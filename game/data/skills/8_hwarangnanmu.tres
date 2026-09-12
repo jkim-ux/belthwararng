@@ -1,6 +1,7 @@
-[gd_resource type="Resource" script_class="SkillData" load_steps=2 format=3]
+[gd_resource type="Resource" script_class="SkillData" load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://scripts/data/skill_data.gd" id="1"]
+[ext_resource type="Resource" path="res://data/attacks/hwarangnanmu.tres" id="2"]
 
 [resource]
 script = ExtResource("1")
@@ -9,5 +10,7 @@ display_name = "일섬연무"
 key_label = "R"
 action_name = &"skill_r"
 cooldown_ms = 35000
-implemented = false
+implemented = true
 ground_only = true
+attack = ExtResource("2")
+hint = "전방 5연속 마무리"

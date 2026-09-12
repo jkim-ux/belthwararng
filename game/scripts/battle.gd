@@ -44,6 +44,7 @@ var debug_overlay: Node
 var decor: RoomDecor
 var event_log: Array[String] = []
 var hits_this_run: int = 0
+var parries_this_run: int = 0
 var profiles: Array[CombatProfile] = []
 var profile_index: int = 1                   ## 기본은 새 모멘텀 R1
 var profile_switch_message: String = ""
@@ -81,6 +82,9 @@ var chest: TreasureChest
 var interact_prev: bool = false
 var room_message: String = ""
 var room_message_ticks: int = 0
+var brute_hint_shown: bool = false           ## 첫 강인병 안내(출정당 1회)
+var run_brute_attacks: int = 0               ## 이번 출정에서 강인병이 실제로 준비를 시작한 패턴 수(방 정리 시 합산)
+var run_brute_staggers: int = 0              ## Q 로 무너뜨린 횟수
 
 # 개발용 자동 시연/스크린샷
 var _screenshot_path: String = ""
@@ -91,6 +95,7 @@ const PLAYER_START := Vector2(300, 540)
 const DUMMY_START := Vector2(700, 540)
 const KNOCKBACK_DUMMY_START := Vector2(900, 520)
 const ENEMY_START := Vector2(1000, 620)
+const BRUTE_START := Vector2(1150, 480)      ## 수련장 강인병 표적(실제 강인병: 접근·2패턴·Q 무너짐 시험)
 const CHEST_POS := Vector2(640, 545)
 const DOOR_Y := 545.0
 
@@ -186,6 +191,7 @@ func respawn_enemies() -> void:
 		enemies.append(knockback_dummy)
 	if spawn_enemy:
 		spawn_melee_enemy(ENEMY_START)
+		spawn_brute_enemy(BRUTE_START)
 	log_event("적 재생성")
 
 func spawn_melee_enemy(at: Vector2) -> MeleeEnemy:
@@ -204,6 +210,20 @@ func spawn_captain(at: Vector2, boss_name: String = "", boss_hp: int = 0) -> Cap
 	enemies.append(e)
 	return e
 
+func spawn_brute_enemy(at: Vector2) -> BruteEnemy:
+	var e := BruteEnemy.new()
+	actors_root.add_child(e)
+	e.configure(tuning, self, at, player)
+	e.died.connect(_on_enemy_died)
+	enemies.append(e)
+	if mode == &"campaign" and not brute_hint_shown:
+		# 첫 강인병 등장 안내(출정당 1회). 입력을 잠그거나 장면을 멈추지 않는다.
+		brute_hint_shown = true
+		room_message = "큰 적은 공격을 받아도 버틴다. Q로 자세를 무너뜨리거나 공격을 피하라"
+		room_message_ticks = 270
+		log_event("강인병 등장")
+	return e
+
 func spawn_archer_enemy(at: Vector2) -> ArcherEnemy:
 	var e := ArcherEnemy.new()
 	actors_root.add_child(e)
@@ -220,7 +240,7 @@ func spawn_thrower_enemy(at: Vector2) -> ThrowerEnemy:
 	enemies.append(e)
 	return e
 
-## 데이터의 종류 이름으로 적을 생성한다. &"melee" / &"archer" / &"thrower" / &"boss"(거점 던전의 대장) / &"captain"(기본 대장)
+## 데이터의 종류 이름으로 적을 생성한다. &"melee" / &"brute" / &"archer" / &"thrower" / &"boss"(거점 던전의 대장) / &"captain"(기본 대장)
 func spawn_enemy_kind(kind: StringName, at: Vector2) -> EnemyBase:
 	# 플레이어와 바로 겹치지 않게 등장 위치를 보정한다.
 	var r := arena_rect()
@@ -239,6 +259,8 @@ func spawn_enemy_kind(kind: StringName, at: Vector2) -> EnemyBase:
 			return spawn_archer_enemy(at)
 		&"thrower":
 			return spawn_thrower_enemy(at)
+		&"brute":
+			return spawn_brute_enemy(at)
 		&"melee":
 			return spawn_melee_enemy(at)
 		_:
@@ -382,6 +404,9 @@ func start_encounter(site: SiteDef, p_run_id: String, comp: CompanionDef, attack
 	chest_opened = false
 	chest_heal_total = 0
 	pending_currency = 0
+	brute_hint_shown = false
+	run_brute_attacks = 0
+	run_brute_staggers = 0
 	player.reset_to(site.player_start)
 	player.attack_power = attack_power
 	player.max_hp = max_hp
@@ -431,8 +456,7 @@ func _enter_room(room_id: StringName, from_dir: StringName, explicit_start: Vect
 	player.floor_pos = start
 	player.velocity = Vector2.ZERO
 	player.knockback_remaining = 0.0
-	player.clear_buffer()
-	player.end_hitboxes()
+	player.reset_transients()   # 보관 입력·판정·방어 창·반격 예약·다단히트 이벤트·남은 행동 제한
 	if player.alive and player.state != &"ground":
 		player.change_state(&"ground")
 	if from_dir == &"west":
@@ -462,10 +486,19 @@ func _enter_room(room_id: StringName, from_dir: StringName, explicit_start: Vect
 
 ## 방을 떠날 때 정리: 적·투사체·항아리·불·예고·허가·피해 시계. 다음 방으로 넘어가지 않는다.
 func _clear_room_transients() -> void:
+	_accumulate_brute_stats()
 	for e in enemies:
 		if is_instance_valid(e):
 			e.queue_free()
 	enemies.clear()
+
+func _accumulate_brute_stats() -> void:
+	for e in enemies:
+		if e is BruteEnemy and is_instance_valid(e):
+			run_brute_attacks += e.attacks_started
+			run_brute_staggers += e.staggers
+			e.attacks_started = 0
+			e.staggers = 0
 	for pr in projectiles:
 		if is_instance_valid(pr):
 			pr.finish()
@@ -666,6 +699,7 @@ func _resolve(p_outcome: StringName) -> void:
 		return
 	result_state = &"resolved"
 	outcome = p_outcome
+	_accumulate_brute_stats()
 	for a in all_actors():
 		a.end_hitboxes()
 	for pr in projectiles:
@@ -685,7 +719,7 @@ func _resolve(p_outcome: StringName) -> void:
 		if is_instance_valid(sp.marker):
 			sp.marker.queue_free()
 	pending_spawns.clear()
-	player.clear_buffer()
+	player.reset_transients()
 	log_event("승리" if p_outcome == &"victory" else ("패배" if p_outcome == &"defeat" else "출정 포기"))
 	resolved.emit(p_outcome, run_id)
 
@@ -748,37 +782,72 @@ func _step_projectiles() -> void:
 			pr.step(r)
 
 ## 투사체 판정: 이전 위치~현재 위치의 이동 구간·깊이·높이를 대상과 비교한다(빠른 화살이 대상을 뚫고 지나가지 않게).
-## 같은 팀은 관통, 명중 시 단일 대상 피해 후 제거. 최대 사거리·수명이 끝난 마지막 구간도 판정한 뒤 제거한다.
+## 같은 팀은 관통. 화살(pierce_max 0)은 단일 대상 피해 후 제거, 검기는 최초 접촉 거리순으로 최대 N 명(대상당 1회) 뒤 소멸.
+## 최대 사거리·수명이 끝난 마지막 구간도 판정한 뒤 제거한다. 이동 구간은 경기장 경계까지 절단한다.
+## 주인공의 흘려받기는 진행 방향(vx×방어 방향<0)으로 정면을 판정하며 성공 시 그 화살을 제거한다.
 func _resolve_projectiles() -> void:
 	var actors := all_actors()
+	var r := arena_rect()
 	var keep: Array = []
 	for pr in projectiles:
 		if not is_instance_valid(pr) or not pr.alive:
 			continue
+		var xr: Vector2 = pr.x_range()
+		xr = Vector2(maxf(xr.x, r.position.x), minf(xr.y, r.end.x))
+		var cands: Array = []
 		for target in actors:
-			if target.team == pr.team or not target.can_be_hit():
+			if target.team == pr.team:
 				continue
-			if not _ranges_overlap(pr.x_range(), target.hurt_x_range()):
+			if pr.passed_targets.has(target.get_instance_id()):
+				continue
+			if not _ranges_overlap(xr, target.hurt_x_range()):
 				continue
 			if not _ranges_overlap(pr.y_range(), target.hurt_y_range()):
 				continue
 			if not _ranges_overlap(pr.z_range(), target.hurt_z_range()):
 				continue
+			# 실제 이동 방향의 최초 접촉 거리(동률이면 생성 ID 순). 배우 배열 순서에 의존하지 않는다.
+			var hx := target.hurt_x_range()
+			var contact: float = (hx.x - pr.half_length - pr.prev_x) if pr.facing > 0 else (pr.prev_x - hx.y - pr.half_length)
+			cands.append({"t": target, "d": contact, "id": target.get_instance_id()})
+		cands.sort_custom(func(a, b): return a.d < b.d if not is_equal_approx(a.d, b.d) else a.id < b.id)
+		for c in cands:
+			if not pr.alive:
+				break
+			var target: BattleActor = c.t
+			if pr.pierce_max > 0:
+				pr.passed_targets.append(target.get_instance_id())
+			if not target.can_be_hit():
+				continue   # 무적: 피해·관통 수 없이 통과(재타격하지 않음)
 			var info := HitInfo.new()
-			info.attacker = pr.shooter
+			info.attacker = pr.shooter if is_instance_valid(pr.shooter) else null
 			info.attack = pr.attack
 			info.damage = pr.damage
 			info.hitstop_ticks = 0
 			info.direction = pr.facing
-			if target.receive_hit(info):
-				hits_this_run += 1
-				hit_applied.emit(pr.shooter, target, info)
-				_spawn_damage_number(target, info)
-				_spawn_hit_flash(target, info)
-				var shooter_name: String = pr.shooter.display_name if (pr.shooter != null and is_instance_valid(pr.shooter)) else "화살"
-				log_event("%s → %s %d" % [shooter_name, target.display_name, roundi(info.damage)])
+			info.knockback = pr.attack.knockback
+			info.action_id = pr.action_id
+			info.projectile_id = pr.get_instance_id()
+			info.source_pos = Vector2(pr.prev_x, pr.floor_pos.y)
+			info.attacker_facing = pr.facing
+			info.from_projectile = true
+			if target is Player and target.try_parry(info):
+				parries_this_run += 1
+				_spawn_parry_flash(target)
+				log_event("%s 가 화살을 흘려받음" % target.display_name)
 				pr.finish()
 				break
+			if target.receive_hit(info):
+				hits_this_run += 1
+				hit_applied.emit(info.attacker, target, info)
+				_spawn_damage_number(target, info)
+				_spawn_hit_flash(target, info)
+				var shooter_name: String = pr.shooter.display_name if (pr.shooter != null and is_instance_valid(pr.shooter)) else ("검기" if pr.pierce_max > 0 else "화살")
+				log_event("%s → %s %d" % [shooter_name, target.display_name, roundi(info.damage)])
+				pr.hits_done += 1
+				if pr.pierce_max <= 0 or pr.hits_done >= pr.pierce_max:
+					pr.finish()
+					break
 		if pr.alive and pr.expiring:
 			pr.finish()
 		if pr.alive:
@@ -933,6 +1002,8 @@ func alive_enemies() -> Array[EnemyBase]:
 
 ## 적중 판정: 좌우 거리, 깊이 차이, 높이 범위를 모두 확인한다.
 ## 같은 공격 인스턴스와 대상 조합에는 한 번만 피해를 준다. 같은 팀끼리는 피해가 없다.
+## HWR-004: 대상마다 처리 전에 소유자 생존·판정 취소 여부를 다시 확인한다(같은 틱에 Q·경직·사망으로 거둔 판정의 복사본이
+## 다음 대상에게 잔여 피해를 주지 않게). 주인공의 흘려받기(guard)는 receive_hit 이전 바깥 판정 계층에서 처리한다.
 func _resolve_hits() -> void:
 	var actors := all_actors()
 	for attacker in actors:
@@ -940,6 +1011,8 @@ func _resolve_hits() -> void:
 			continue
 		for hb in attacker.active_hitboxes.duplicate():
 			for target in actors:
+				if not attacker.alive or hb.cancelled or not attacker.active_hitboxes.has(hb):
+					break
 				if target == attacker or target.team == attacker.team:
 					continue
 				if hb.already_hit(target):
@@ -954,6 +1027,18 @@ func _resolve_hits() -> void:
 				info.damage = hb.damage
 				info.hitstop_ticks = hb.hitstop_ticks
 				info.direction = 1 if target.floor_pos.x >= attacker.floor_pos.x else -1
+				info.knockback = hb.knockback
+				info.hit_index = hb.hit_index
+				info.action_id = hb.action_id
+				info.source_pos = attacker.floor_pos
+				info.attacker_facing = hb.facing
+				if target is Player and target.try_parry(info):
+					# 방어 성공: 이 타격·대상은 처리 완료로 기록(다음 활성 틱 재피해 없음). 피해·경직·타격 정지 없음.
+					hb.mark_hit(target)
+					parries_this_run += 1
+					_spawn_parry_flash(target)
+					log_event("%s 가 %s 의 %s 을 흘려받음" % [target.display_name, attacker.display_name, hb.attack.display_name])
+					continue
 				if target.receive_hit(info):
 					hb.mark_hit(target)
 					attacker.on_hit_confirmed(hb.hitstop_ticks)
@@ -967,6 +1052,11 @@ static func _ranges_overlap(a: Vector2, b: Vector2) -> bool:
 	return a.x <= b.y and b.x <= a.y
 
 func _overlaps(hb: HitBox, attacker: BattleActor, target: BattleActor) -> bool:
+	if hb.ellipse:
+		# 바닥 타원(공격자 발 중심) 안의 대상 발 위치 + 높이 겹침. 예고 타원과 같은 반경을 쓴다.
+		if not hb.in_ellipse(attacker.floor_pos, target.floor_pos):
+			return false
+		return _ranges_overlap(hb.world_z_range(attacker.height), target.hurt_z_range())
 	var xr := hb.world_x_range(attacker.floor_pos)
 	if not _ranges_overlap(xr, target.hurt_x_range()):
 		return false
@@ -985,6 +1075,22 @@ func _spawn_damage_number(target: BattleActor, info: HitInfo) -> void:
 	dn.text = str(roundi(info.damage))
 	dn.color = Color(1.0, 0.95, 0.5) if target.team == &"enemy" else Color(1.0, 0.4, 0.4)
 	dn.position = target.floor_pos + Vector2(randf_range(-10, 10), -target.height - target.body_height - 10)
+	fx_root.add_child(dn)
+
+## 흘려받기 성공 표시: 피해 숫자 없이 푸른 섬광과 문구
+func _spawn_parry_flash(target: BattleActor) -> void:
+	if fx_root == null:
+		return
+	var fl := HitFlash.new()
+	fl.strong = false
+	fl.life = 0.18
+	fl.color = Color(0.5, 0.85, 1.0)
+	fl.position = target.floor_pos + Vector2(float(target.facing) * 30.0, -target.height - target.body_height * 0.55)
+	fx_root.add_child(fl)
+	var dn := DamageNumber.new()
+	dn.text = "흘려받기"
+	dn.color = Color(0.6, 0.9, 1.0)
+	dn.position = target.floor_pos + Vector2(0, -target.height - target.body_height - 10)
 	fx_root.add_child(dn)
 
 func _spawn_hit_flash(target: BattleActor, info: HitInfo) -> void:

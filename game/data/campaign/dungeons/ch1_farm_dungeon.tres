@@ -36,8 +36,8 @@ waves = [SubResource("battle_1_w1"), SubResource("battle_1_w2")]
 
 [sub_resource type="Resource" id="battle_2_w1"]
 script = ExtResource("2")
-enemy_kinds = [&"melee", &"melee", &"thrower"]
-spawn_positions = [Vector2(930, 560), Vector2(980, 640), Vector2(1110, 620)]
+enemy_kinds = [&"brute", &"melee", &"thrower"]
+spawn_positions = [Vector2(1040, 560), Vector2(930, 560), Vector2(1110, 620)]
 spawn_delay_ms = 700.0
 
 [sub_resource type="Resource" id="battle_2_w2"]
@@ -66,14 +66,14 @@ waves = []
 
 [sub_resource type="Resource" id="battle_3_w1"]
 script = ExtResource("2")
-enemy_kinds = [&"melee", &"melee", &"melee", &"archer"]
-spawn_positions = [Vector2(930, 560), Vector2(980, 640), Vector2(910, 480), Vector2(1130, 470)]
+enemy_kinds = [&"brute", &"melee", &"melee", &"archer"]
+spawn_positions = [Vector2(1040, 560), Vector2(930, 560), Vector2(980, 640), Vector2(1130, 470)]
 spawn_delay_ms = 700.0
 
 [sub_resource type="Resource" id="battle_3_w2"]
 script = ExtResource("2")
-enemy_kinds = [&"melee", &"melee", &"archer", &"thrower"]
-spawn_positions = [Vector2(930, 560), Vector2(980, 640), Vector2(1130, 470), Vector2(1110, 620)]
+enemy_kinds = [&"brute", &"melee", &"archer", &"thrower"]
+spawn_positions = [Vector2(1040, 560), Vector2(930, 560), Vector2(1130, 470), Vector2(1110, 620)]
 spawn_delay_ms = 700.0
 
 [sub_resource type="Resource" id="battle_3"]

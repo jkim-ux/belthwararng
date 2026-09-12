@@ -228,7 +228,7 @@ func _on_hit(info: HitInfo) -> void:
 	if info.attack.hitstun_ms <= 0.0:
 		return
 	hitstun_ticks = Ticks.from_ms(info.attack.hitstun_ms)
-	knockback_remaining = info.attack.knockback * 0.6
+	knockback_remaining = info.effective_knockback() * 0.6
 	knockback_dir = info.direction
 	velocity = Vector2.ZERO
 	change_state(&"hitstun")

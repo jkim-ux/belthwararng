@@ -1,0 +1,31 @@
+[gd_resource type="Resource" script_class="AttackData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/attack_data.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = &"pajingyeok"
+display_name = "방어깨기"
+startup_ms = 250
+active_ms = 100
+recovery_ms = 350
+chain_window_ms = 0
+move_cancel_ms = 100
+dodge_after_active = false
+damage_mult = 3.0
+strong = true
+hitstun_ms = 450
+knockback = 35
+knockback_ms = 150
+launch = false
+launch_velocity = 0
+guard_break = true
+ignores_boss_flinch = true
+lock_after_cancel = true
+reach_forward = 110
+reach_back = 10
+depth_tolerance = 24
+z_min = -10
+z_max = 100
+dash_distance = 0
+swing_style = 6

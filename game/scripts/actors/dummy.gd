@@ -32,6 +32,11 @@ func _step_state() -> void:
 
 func _on_landed_from_launch() -> void:
 	airborne_by_launch = false
+	if falling_by_knockdown:
+		# 내려베기로 떨어진 경우는 실제 다운(기상 보호 포함)을 보여준다
+		falling_by_knockdown = false
+		change_state(&"down")
+		return
 	change_state(&"idle")
 
 func _draw_body() -> void:

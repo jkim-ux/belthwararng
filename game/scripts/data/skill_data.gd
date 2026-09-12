@@ -11,6 +11,7 @@ extends Resource
 @export var implemented: bool = false
 @export var ground_only: bool = true           ## 첫 버전의 8개 스킬은 지상 전용
 @export var attack: AttackData
+@export var hint: String = ""                  ## HUD 에 보이는 짧은 역할 안내
 
 func cooldown_ticks() -> int:
 	return Ticks.from_ms(cooldown_ms)

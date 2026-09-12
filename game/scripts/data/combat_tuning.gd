@@ -36,7 +36,7 @@ extends Resource
 
 @export_group("적")
 @export var enemy_max_hp: int = 65          ## 근접 적. 같은 깊이 평타 1세트(20+20+28=68)로 처치
-@export var enemy_attack_damage: int = 10
+@export var enemy_attack_damage: int = 20      ## HWR-004: 10 → 20 (적 피해 2배)
 @export var enemy_speed_x: float = 150.0
 @export var enemy_speed_y: float = 110.0
 @export var enemy_telegraph_ms: float = 500.0
@@ -56,7 +56,7 @@ extends Resource
 
 @export_group("적 궁수")
 @export var archer_max_hp: int = 55
-@export var archer_damage: int = 8
+@export var archer_damage: int = 16               ## HWR-004: 8 → 16
 @export var archer_telegraph_ms: float = 650.0     ## 사격선 예고(방향·깊이 고정)
 @export var archer_interval_ms: float = 2200.0     ## 발사 간격 최소
 @export var archer_range: float = 560.0
@@ -88,12 +88,44 @@ extends Resource
 @export var fire_radius_y: float = 28.0
 @export var fire_duration_ms: float = 4000.0
 @export var fire_tick_ms: float = 500.0            ## 대상별 피해 주기(첫 피해도 노출 0.5초 뒤)
-@export var fire_damage: int = 3
+@export var fire_damage: int = 6                   ## HWR-004: 3 → 6 (0.5초마다, 4초 최대 8회 = 48)
 @export var fire_max_height: float = 12.0          ## 이 높이 이하일 때만 피해
 
+@export_group("강인병 (HWR-004)")
+@export var brute_max_hp: int = 180
+@export var brute_attack_damage: int = 24          ## 원값 12 의 2배 적용값
+@export var brute_speed_x: float = 100.0
+@export var brute_speed_y: float = 80.0
+@export var brute_half_width: float = 32.0
+@export var brute_half_depth: float = 14.0
+@export var brute_height: float = 94.0
+@export var brute_idle_ms: float = 300.0
+@export var brute_engage_x: float = 90.0            ## 이 발 간격 안이면 공격 허가를 요청
+@export var brute_engage_y: float = 8.0
+@export var brute_combo_telegraph_ms: float = 700.0
+@export var brute_combo_hit_ms: float = 100.0       ## 각 베기 타격 구간
+@export var brute_combo_gap_ms: float = 250.0
+@export var brute_combo_recover_ms: float = 900.0
+@export var brute_combo_reach: float = 130.0
+@export var brute_combo_reach_back: float = 10.0
+@export var brute_combo_depth: float = 28.0
+@export var brute_combo_z_max: float = 100.0
+@export var brute_slam_telegraph_ms: float = 950.0
+@export var brute_slam_active_ms: float = 100.0
+@export var brute_slam_recover_ms: float = 1100.0
+@export var brute_slam_radius_x: float = 110.0
+@export var brute_slam_radius_y: float = 45.0
+@export var brute_slam_z_max: float = 90.0
+@export var brute_stagger_ms: float = 1000.0        ## Q 방어깨기 전용 자세 무너짐
+
 @export_group("초소 대장")
+@export var captain_slash_range: float = 110.0         ## 베기 후보: 표적과 |dx| ≤ 이 값(깊이 차이 ≤ 8)
+@export var captain_charge_min_range: float = 80.0     ## 돌진 후보: min ≤ |dx| ≤ max 이고 고정 경로가 실제로 닿을 때
+@export var captain_charge_max_range: float = 300.0
+@export var captain_recover_step_ms: float = 300.0     ## 회복 첫 구간: 공격 방향 반대로 균등 이동
+@export var captain_recover_step_px: float = 60.0
 @export var captain_max_hp: int = 600
-@export var captain_attack_damage: int = 12
+@export var captain_attack_damage: int = 24     ## HWR-004: 12 → 24
 @export var captain_slash_telegraph_ms: float = 600.0
 @export var captain_slash_active_ms: float = 100.0
 @export var captain_slash_recover_ms: float = 800.0

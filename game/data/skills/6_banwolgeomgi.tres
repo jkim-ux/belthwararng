@@ -1,6 +1,7 @@
-[gd_resource type="Resource" script_class="SkillData" load_steps=2 format=3]
+[gd_resource type="Resource" script_class="SkillData" load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://scripts/data/skill_data.gd" id="1"]
+[ext_resource type="Resource" path="res://data/attacks/banwolgeomgi.tres" id="2"]
 
 [resource]
 script = ExtResource("1")
@@ -9,5 +10,7 @@ display_name = "검기"
 key_label = "W"
 action_name = &"skill_w"
 cooldown_ms = 7000
-implemented = false
+implemented = true
 ground_only = true
+attack = ExtResource("2")
+hint = "같은 깊이 최대 3명 관통"

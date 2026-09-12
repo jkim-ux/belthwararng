@@ -1,0 +1,40 @@
+[gd_resource type="Resource" script_class="AttackData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/attack_data.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = &"banwolgeomgi"
+display_name = "검기"
+startup_ms = 100
+active_ms = 50
+recovery_ms = 200
+chain_window_ms = 0
+move_cancel_ms = 100
+dodge_after_active = false
+damage_mult = 1.6
+strong = false
+hitstun_ms = 200
+knockback = 10
+knockback_ms = 100
+launch = false
+launch_velocity = 0
+ignores_boss_flinch = true
+lock_after_cancel = true
+fires_projectile = true
+projectile_speed = 700.0
+projectile_range = 500.0
+projectile_height = 35.0
+projectile_half_height = 12.0
+projectile_half_depth = 12.0
+projectile_half_length = 10.0
+projectile_life_ticks = 43
+projectile_pierce = 3
+projectile_spawn_offset = 30.0
+reach_forward = 0
+reach_back = 0
+depth_tolerance = 12
+z_min = -10
+z_max = 90
+dash_distance = 0
+swing_style = 7

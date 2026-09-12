@@ -1,9 +1,12 @@
 class_name Player
 extends BattleActor
 ## 주인공(사무라이) 조작. 입력 보관, 지상 이동, 점프 높이, 회피, 평타 3연격, 스킬 실행을 담당한다.
-## 상태: ground, air, dodge, light, air_attack, skill, hitstun, dead
+## 상태: ground, air, dodge, light, air_attack, skill, guard(흘려받기 방어 창·실패 회복), hitstun, dead
 ## R1: 지상 평타는 타격 구간 동안 감속 곡선으로 전진한다(AttackData.advance_px). 전진량은 틱마다 곡선에서
 ## 계산하므로 취소·피격·경계로 공격이 끝나면 남은 전진은 자동으로 폐기되고 다음 행동에 새지 않는다.
+## HWR-004 R1: 시전마다 action_id 를 올리고 발사/다단히트 이벤트에 실행 완료 표시를 둔다(히트스톱·취소·재진입 반복 금지).
+##   신규 스킬(lock_after_cancel)은 회복 마지막 구간을 이동/회피로 취소해도 남은 행동 제한(action_lock_ticks)을 보존해
+##   '방향키 + 다른 스킬'로 후딜을 우회하지 못한다. A/S 와 평타의 기존 연결 규칙은 바꾸지 않는다.
 
 const ACTION_LIGHT: StringName = &"attack_light"
 const ACTION_JUMP: StringName = &"jump"
@@ -37,6 +40,19 @@ var dodge_dir: Vector2 = Vector2.RIGHT
 var attack_facing: int = 1                ## 공격 시작 때 고정한 좌우 방향
 var attack_advance_done: float = 0.0      ## 이번 공격에서 곡선으로 요청한 전진 합(디버그 표시용)
 var last_event: String = ""               ## 디버그 표시용
+var action_id: int = 0                    ## 시전 ID(시전마다 증가). HitBox/투사체/예약 이벤트 검증용
+var action_lock_ticks: int = 0            ## 이동·회피 취소 뒤 남은 행동 제한(평타·점프·스킬 금지). 살아 있는 행동 틱마다 감소
+var projectile_fired: bool = false        ## 이번 시전에서 투사체를 이미 발사했는가
+var multi_fired: Array[int] = []          ## 이번 시전에서 이미 만든 다단히트 순번
+var skill_uses: Dictionary = {}           ## skill id -> 실제 시전 횟수(난도 보고용)
+# 흘려받기(E)
+var guard_facing: int = 1                 ## 방어·반격까지 고정한 방향
+var guard_consumed: bool = false          ## 이번 방어 창을 이미 소비했는가(같은 틱 여러 공격을 모두 막지 않음)
+var pending_counter: bool = false         ## 방어 성공 → 다음 전투 틱에 반격 시작 예약(같은 틱 실제 경직/사망이면 폐기)
+var parries: int = 0                      ## 방어 성공 횟수
+var counters_started: int = 0
+var guard_fx_ticks: int = 0               ## HUD 표시용(성공/실패 문구 남는 시간)
+var last_guard_result: String = ""
 
 func _init() -> void:
 	team = &"player"
@@ -85,8 +101,25 @@ func reset_to(start: Vector2) -> void:
 		cooldowns[k] = 0
 	dodge_cooldown_ticks = 0
 	facing = 1
+	reset_transients()
 	change_state(&"ground")
 	_sync_position()
+
+## 방 전이·출정 종료·수련장 초기화: 보관 입력·판정·예약 이벤트·남은 행동 제한을 정리한다. 체력·대기시간은 건드리지 않는다.
+func reset_transients() -> void:
+	buffered_action = &""
+	end_hitboxes()
+	current_hitbox = null
+	action_lock_ticks = 0
+	projectile_fired = false
+	multi_fired.clear()
+	_reset_guard()
+
+## 흘려받기 상태 정리: 방어 창·반격 예약을 버린다(방 전이·출정 종료·초기화)
+func _reset_guard() -> void:
+	guard_consumed = false
+	pending_counter = false
+	guard_fx_ticks = 0
 
 # ------------------------------------------------------------------ 입력
 
@@ -130,6 +163,9 @@ func _try_buffer(allowed: Array[StringName]) -> bool:
 		return false
 	if not allowed.has(buffered_action):
 		return false
+	if action_lock_ticks > 0 and buffered_action != ACTION_DODGE:
+		# 취소 뒤 남은 행동 제한: 회피만 허용. 보관은 유지되어 제한이 끝나면(보관 시간 안이면) 실행된다.
+		return false
 	var action := buffered_action
 	match action:
 		ACTION_LIGHT:
@@ -158,12 +194,16 @@ func _try_buffer(allowed: Array[StringName]) -> bool:
 					return false
 				if cooldowns.get(sd.id, 0) > 0:
 					return false
+				if sd.ground_only and (is_airborne() or state == &"air"):
+					return false
 				buffered_action = &""
 				_start_skill(sd)
 				return true
 	return false
 
 func _all_ground_actions() -> Array[StringName]:
+	if action_lock_ticks > 0:
+		return [ACTION_DODGE]
 	var a: Array[StringName] = [ACTION_LIGHT, ACTION_JUMP, ACTION_DODGE]
 	a.append_array(SKILL_ACTIONS)
 	return a
@@ -178,6 +218,10 @@ func _chain_actions() -> Array[StringName]:
 # ------------------------------------------------------------------ 상태
 
 func _step_state() -> void:
+	if action_lock_ticks > 0:
+		action_lock_ticks -= 1
+	if guard_fx_ticks > 0:
+		guard_fx_ticks -= 1
 	match state:
 		&"ground":
 			_step_ground()
@@ -187,6 +231,8 @@ func _step_state() -> void:
 			_step_dodge()
 		&"light", &"skill":
 			_step_attack()
+		&"guard":
+			_step_guard()
 		&"air_attack":
 			_step_air_attack()
 		&"hitstun":
@@ -195,7 +241,7 @@ func _step_state() -> void:
 			pass
 
 func _on_state_entered(new_state: StringName) -> void:
-	if new_state != &"light" and new_state != &"skill" and new_state != &"air_attack":
+	if new_state != &"light" and new_state != &"skill" and new_state != &"air_attack" and new_state != &"guard":
 		end_hitboxes()
 		current_hitbox = null
 		current_attack = null
@@ -248,8 +294,14 @@ func _start_dodge() -> void:
 	dodge_cooldown_ticks = Ticks.from_ms(tuning.dodge_cooldown_ms)
 	invuln_ticks = Ticks.from_ms(tuning.dodge_invuln_ms)
 	velocity = Vector2.ZERO
+	_keep_lock_from_cancel()
 	change_state(&"dodge")
 	last_event = "회피"
+
+## 신규 스킬의 회복을 취소할 때 남은 행동 제한을 보존한다(원래 종료 시점까지 평타·점프·스킬 금지).
+func _keep_lock_from_cancel() -> void:
+	if (state == &"skill" or state == &"guard") and current_attack != null and current_attack.lock_after_cancel:
+		action_lock_ticks = maxi(action_lock_ticks, current_attack.total_ticks() - attack_t())
 
 func _step_dodge() -> void:
 	var dur := Ticks.from_ms(tuning.dodge_ms)
@@ -281,8 +333,99 @@ func _start_skill(sd: SkillData) -> void:
 	current_skill = sd
 	current_attack = sd.attack
 	cooldowns[sd.id] = sd.cooldown_ticks()
+	skill_uses[sd.id] = int(skill_uses.get(sd.id, 0)) + 1
+	if sd.attack.guard:
+		_start_guard(sd)
+		return
 	change_state(&"skill")
 	last_event = sd.display_name
+	_begin_attack_tick()
+
+# ------------------------------------------------------------------ 흘려받기(E)
+
+## 입력을 소비한 틱이 t=0. t0~(startup-1) 정면 방어 창, 그 뒤 실패 회복. 성공/실패 모두 시작 시 재사용이 걸린다.
+func _start_guard(sd: SkillData) -> void:
+	guard_facing = facing
+	attack_facing = facing
+	guard_consumed = false
+	pending_counter = false
+	velocity = Vector2.ZERO
+	action_id += 1
+	change_state(&"guard")
+	state_ticks = 1
+	last_event = sd.display_name
+
+func guard_window_open() -> bool:
+	return state == &"guard" and not guard_consumed and current_attack != null and attack_t() < current_attack.startup_ticks()
+
+## Battle 의 판정 계층이 receive_hit 전에 호출한다. 정면의 반격 가능 근접 공격/화살 1회만 막는다.
+## 근접: 출처 발 x 가 방어 방향 앞쪽(같으면 원 공격 방향이 나를 향하는지). 화살: 진행 방향 × 방어 방향 < 0.
+func try_parry(info: HitInfo) -> bool:
+	if not guard_window_open() or not alive:
+		return false
+	if info.attack == null or not info.attack.parryable:
+		return false
+	var front := false
+	if info.from_projectile:
+		front = info.attacker_facing * guard_facing < 0
+	else:
+		var dx := info.source_pos.x - floor_pos.x
+		if absf(dx) > 0.001:
+			front = signf(dx) == float(guard_facing)
+		else:
+			front = info.attacker_facing == -guard_facing
+	if not front:
+		return false
+	guard_consumed = true      # 확인 즉시 소비: 같은 틱의 다른 공격은 막지 않는다
+	pending_counter = true     # 반격은 이번 피해 순회 밖, 다음 전투 틱 t=0
+	parries += 1
+	last_guard_result = "흘려받기 성공"
+	guard_fx_ticks = 40
+	last_event = "흘려받기 성공"
+	return true
+
+func _step_guard() -> void:
+	var atk := current_attack
+	if pending_counter:
+		pending_counter = false
+		_start_counter()
+		return
+	var t := attack_t()
+	var total := atk.total_ticks()
+	if t >= total:
+		change_state(&"ground")
+		velocity = Vector2.ZERO
+		_step_ground()
+		return
+	approach_velocity(Vector2.ZERO)
+	move_by_velocity()
+	if t == atk.startup_ticks() and not guard_consumed:
+		last_guard_result = "흘려받기 실패"
+		guard_fx_ticks = 30
+	if t >= atk.startup_ticks():
+		# 실패 회복: 회피/이동 취소 창(남은 행동 제한 보존). 방어 창 중 자발적 취소 없음.
+		var mc := atk.move_cancel_ticks()
+		var dc := atk.dodge_cancel_ticks()
+		if dc > 0 and t >= total - dc:
+			if _try_buffer([ACTION_DODGE]):
+				return
+		if mc > 0 and t >= total - mc and move_input.length() > 0.05:
+			_keep_lock_from_cancel()
+			change_state(&"ground")
+			_step_ground()
+			return
+
+## 성공 반격: 방어 방향으로 고정한 짧은 베기 1회. 재사용을 다시 걸지 않는다.
+func _start_counter() -> void:
+	var counter: AttackData = current_attack.counter_attack if current_attack != null else null
+	if counter == null:
+		change_state(&"ground")
+		return
+	facing = guard_facing
+	current_attack = counter
+	counters_started += 1
+	change_state(&"skill")
+	last_event = "흘려받기 반격"
 	_begin_attack_tick()
 
 func _start_air_attack() -> void:
@@ -296,6 +439,9 @@ func _start_air_attack() -> void:
 func _begin_attack_tick() -> void:
 	attack_facing = facing
 	attack_advance_done = 0.0
+	action_id += 1
+	projectile_fired = false
+	multi_fired.clear()
 	state_ticks = 1
 	_advance_attack_hitbox()
 
@@ -321,11 +467,50 @@ func _advance_attack_hitbox() -> void:
 	var t := attack_t()
 	var s := current_attack.startup_ticks()
 	var a := current_attack.active_ticks()
+	var dmg := attack_power * current_attack.damage_mult
+	if current_attack.multi_hits > 0:
+		# 다단히트(일섬연무): 통짜 판정 없이 지정한 N 개만, 각 순번은 시전당 한 번만 만든다.
+		var iv := current_attack.multi_hit_interval_ticks()
+		for k in current_attack.multi_hits:
+			var start := s + k * iv
+			if t == start and not multi_fired.has(k):
+				multi_fired.append(k)
+				end_hitboxes()
+				current_hitbox = begin_hitbox(current_attack, dmg, k)
+				current_hitbox.action_id = action_id
+				if current_attack.knockback_last_hit_only and k < current_attack.multi_hits - 1:
+					current_hitbox.knockback = 0.0
+			elif t == start + current_attack.multi_hit_active_ticks and current_hitbox != null and current_hitbox.hit_index == k:
+				end_hitboxes()
+				current_hitbox = null
+		return
+	if current_attack.fires_projectile:
+		# 검기: 타격 시작 틱에 투사체 1개. 근접 판정은 만들지 않는다.
+		if t == s and not projectile_fired:
+			projectile_fired = true
+			_fire_projectile()
+		return
 	if t == s:
-		current_hitbox = begin_hitbox(current_attack, attack_power * current_attack.damage_mult)
+		current_hitbox = begin_hitbox(current_attack, dmg)
+		current_hitbox.action_id = action_id
 	elif t == s + a:
 		end_hitboxes()
 		current_hitbox = null
+
+## 발사 순간의 공격력·방향을 저장한 투사체. 발 x + 방향×30 / 같은 깊이 / 높이 35 에서 시작한다.
+func _fire_projectile() -> void:
+	if battle == null or not battle.has_method("add_projectile"):
+		return
+	var atk := current_attack
+	var pr := Projectile.new()
+	var start := Vector2(floor_pos.x + float(attack_facing) * atk.projectile_spawn_offset, floor_pos.y)
+	pr.setup(team, self, atk, attack_power * atk.damage_mult, start, atk.projectile_height, attack_facing,
+		atk.projectile_speed, atk.projectile_range, atk.projectile_life_ticks, atk.projectile_half_height, atk.projectile_half_depth)
+	pr.half_length = atk.projectile_half_length
+	pr.pierce_max = atk.projectile_pierce
+	pr.action_id = action_id
+	battle.add_projectile(pr)
+	last_event = "%s 발사" % atk.display_name
 
 func _step_attack() -> void:
 	var atk := current_attack
@@ -341,7 +526,10 @@ func _step_attack() -> void:
 		return
 	_advance_attack_hitbox()
 	var in_active := t >= s and t < s + a
-	if atk.dash_distance > 0.0 and in_active:
+	if atk.multi_hits > 0:
+		# 일섬연무: 준비부터 종료까지 이동 없음·방향 고정
+		velocity = Vector2.ZERO
+	elif atk.dash_distance > 0.0 and in_active:
 		# 스킬 돌진: 기존 일정 속도 전진
 		velocity = Vector2(attack_facing * atk.dash_distance / (float(a) * Ticks.DT), 0.0)
 		move_by_velocity()
@@ -367,10 +555,13 @@ func _step_attack() -> void:
 				return
 	else: # skill
 		var mc := atk.move_cancel_ticks()
-		if mc > 0 and t >= total - mc:
+		var dc := atk.dodge_cancel_ticks()
+		if dc > 0 and t >= total - dc:
 			if _try_buffer([ACTION_DODGE]):
 				return
+		if mc > 0 and t >= total - mc:
 			if move_input.length() > 0.05:
+				_keep_lock_from_cancel()
 				change_state(&"ground")
 				_step_ground()
 				return
@@ -398,8 +589,9 @@ func _step_hitstun() -> void:
 
 func _on_hit(info: HitInfo) -> void:
 	clear_buffer()
+	pending_counter = false     # 같은 틱 뒤쪽 타격/다른 공격으로 실제 경직: 반격 예약 폐기
 	hitstun_ticks = Ticks.from_ms(tuning.player_hitstun_ms)
-	knockback_remaining = info.attack.knockback
+	knockback_remaining = info.effective_knockback()
 	knockback_dir = info.direction
 	velocity = Vector2.ZERO
 	if height > 0.0:
@@ -409,10 +601,13 @@ func _on_hit(info: HitInfo) -> void:
 
 func _die() -> void:
 	clear_buffer()
+	action_lock_ticks = 0
+	pending_counter = false
 	super()
 
 func cooldown_for(sd: SkillData) -> int:
 	return cooldowns.get(sd.id, 0)
+
 
 # ------------------------------------------------------------------ 그리기
 ## 몸 기울기와 검 궤적은 그림에만 적용한다. 발 위치, 그림자, y 정렬, 피격 범위, 높이는 바꾸지 않는다.
@@ -451,10 +646,22 @@ func _draw_body() -> void:
 	_draw_sword()
 
 func _draw_sword() -> void:
+	if state == &"guard" and current_attack != null:
+		# 흘려받기: 검을 정면에 세운다. 창이 열려 있으면 밝고, 실패 회복이면 흐리게
+		var f := float(guard_facing)
+		var pivot := Vector2(0.0, -height - body_height + 22.0)
+		var open := guard_window_open()
+		var col := Color(0.6, 0.9, 1.0, 0.95) if open else Color(0.7, 0.7, 0.75, 0.6)
+		draw_line(pivot + Vector2(f * 18.0, 18.0), pivot + Vector2(f * 26.0, -34.0), col, 4.0)
+		if open:
+			draw_arc(pivot + Vector2(f * 22.0, -8.0), 30.0, deg_to_rad(-60.0 if f > 0 else 120.0), deg_to_rad(60.0 if f > 0 else 240.0), 10, Color(0.5, 0.85, 1.0, 0.5), 2.0)
+		return
 	if current_attack == null or (state != &"light" and state != &"skill" and state != &"air_attack"):
 		return
 	var style: int = current_attack.swing_style
 	var phase := attack_phase()
+	if style == AttackData.Swing.WAVE and current_attack.fires_projectile:
+		style = AttackData.Swing.HORIZONTAL
 	if style == AttackData.Swing.LEGACY:
 		# M1 표시: 타격 구간 동안 앞쪽 사각형
 		if current_hitbox != null and phase == &"active":
@@ -480,6 +687,36 @@ func _draw_sword() -> void:
 			a0 = deg_to_rad(-105.0)
 			a1 = deg_to_rad(32.0)
 			radius = current_attack.reach_forward - 4.0
+		AttackData.Swing.OVERHEAD:
+			# 내려베기: 머리 위에서 정면 아래까지 크게
+			a0 = deg_to_rad(-150.0)
+			a1 = deg_to_rad(40.0)
+			radius = current_attack.reach_forward - 4.0
+		AttackData.Swing.SPIN:
+			# 회전베기: 앞에서 뒤까지 한 바퀴(양쪽 판정)
+			a0 = deg_to_rad(-20.0)
+			a1 = deg_to_rad(-380.0)
+			radius = current_attack.reach_forward - 6.0
+		AttackData.Swing.THRUST:
+			# 방어깨기: 찌르기(각도 변화 작음, 굵은 날)
+			a0 = deg_to_rad(-6.0)
+			a1 = deg_to_rad(4.0)
+			radius = current_attack.reach_forward - 4.0
+		AttackData.Swing.WAVE:
+			# 검기: 짧은 가로베기 자세(투사체는 따로 그린다)
+			a0 = deg_to_rad(-30.0)
+			a1 = deg_to_rad(10.0)
+			radius = 60.0
+		AttackData.Swing.GUARD:
+			a0 = deg_to_rad(-70.0)
+			a1 = deg_to_rad(-70.0)
+			radius = 48.0
+		AttackData.Swing.FLURRY:
+			# 일섬연무: 타격 순번에 따라 위아래로 번갈아 빠르게
+			var k := current_hitbox.hit_index if current_hitbox != null else multi_fired.size()
+			a0 = deg_to_rad(-40.0 if k % 2 == 0 else 20.0)
+			a1 = deg_to_rad(20.0 if k % 2 == 0 else -40.0)
+			radius = current_attack.reach_forward - 6.0
 	var col := Color(1.0, 0.96, 0.75, 0.9)
 	if phase == &"startup":
 		# 검을 뒤로 모은다
@@ -488,7 +725,12 @@ func _draw_sword() -> void:
 		return
 	var u := 0.0
 	var alpha := 1.0
-	if phase == &"active":
+	if style == AttackData.Swing.FLURRY and phase == &"active":
+		# 다단히트: 각 타격의 활성 2틱 안에서만 궤적을 그린다
+		if current_hitbox == null:
+			return
+		u = 1.0
+	elif phase == &"active":
 		u = clampf(_swing_progress(), 0.0, 1.0)
 	else:
 		var past := attack_t() - current_attack.startup_ticks() - current_attack.active_ticks()
@@ -512,4 +754,9 @@ func _draw_sword() -> void:
 	# 검 날 (현재 각도)
 	col.a = alpha
 	var tip := pivot + Vector2(cos(ang) * f, sin(ang)) * radius
-	draw_line(pivot, tip, col, 4.0 if style == AttackData.Swing.DIAGONAL_DOWN else 3.0)
+	var thick := 3.0
+	if style == AttackData.Swing.DIAGONAL_DOWN or style == AttackData.Swing.OVERHEAD:
+		thick = 4.0
+	elif style == AttackData.Swing.THRUST:
+		thick = 5.0
+	draw_line(pivot, tip, col, thick)

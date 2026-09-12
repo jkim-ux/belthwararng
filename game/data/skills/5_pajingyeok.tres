@@ -1,6 +1,7 @@
-[gd_resource type="Resource" script_class="SkillData" load_steps=2 format=3]
+[gd_resource type="Resource" script_class="SkillData" load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://scripts/data/skill_data.gd" id="1"]
+[ext_resource type="Resource" path="res://data/attacks/pajingyeok.tres" id="2"]
 
 [resource]
 script = ExtResource("1")
@@ -9,5 +10,7 @@ display_name = "방어깨기"
 key_label = "Q"
 action_name = &"skill_q"
 cooldown_ms = 12000
-implemented = false
+implemented = true
 ground_only = true
+attack = ExtResource("2")
+hint = "강인병 자세 무너뜨림"
