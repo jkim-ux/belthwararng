@@ -1,0 +1,27 @@
+[gd_resource type="Resource" script_class="CompanionDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/companion_def.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = &"aya"
+display_name = "궁수 아야"
+role = "원거리 지원 사격"
+unlock_chapter_id = &"ch1"
+implemented = true
+description = "주인공 뒤에서 따라오며 사거리 안의 적에게 화살을 쏜다. 체력 60, 화살 피해 7, 1.5초 간격."
+join_text = "농촌 주민을 피신시키던 아야가 고개 길이 안전해진 것을 보고 합류한다. "길이 열렸으니, 이제 활을 앞으로 돌릴게요.""
+max_hp = 60
+attack_damage = 7.0
+fire_interval_ms = 1500
+aim_ms = 250
+attack_range = 360
+follow_distance = 100
+move_speed_x = 260
+move_speed_y = 170
+projectile_speed = 600
+projectile_max_distance = 360
+projectile_life_ms = 600
+projectile_height = 35
+projectile_half_height = 4
+projectile_half_depth = 4

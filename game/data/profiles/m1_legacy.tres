@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="CombatProfile" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/combat_profile.gd" id="1"]
+[ext_resource type="Resource" path="res://data/attacks/light1.tres" id="2"]
+[ext_resource type="Resource" path="res://data/attacks/light2.tres" id="3"]
+[ext_resource type="Resource" path="res://data/attacks/light3.tres" id="4"]
+
+[resource]
+script = ExtResource("1")
+id = &"m1_legacy"
+display_name = "기존 M1"
+description = "전진 0/0/0, 밀림 30/30/70 (매초 240 px 일정 속도), 검 표시는 앞쪽 사각형"
+light_attacks = [ExtResource("2"), ExtResource("3"), ExtResource("4")]

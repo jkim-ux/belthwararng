@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="SkillData" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/skill_data.gd" id="1"]
+[ext_resource type="Resource" path="res://data/attacks/hoepungcham.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = &"hoepungcham"
+display_name = "회전베기"
+key_label = "F"
+action_name = &"skill_f"
+cooldown_ms = 10000
+implemented = true
+ground_only = true
+attack = ExtResource("2")
+hint = "가까운 양쪽 견제"

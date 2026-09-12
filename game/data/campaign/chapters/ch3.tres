@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="ChapterDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/chapter_def.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = &"ch3"
+index = 3
+display_name = "굶주린 들판"
+prerequisite_chapter_id = &"ch2"
+site_ids = []
+reward_companion_id = &"ren"
+implemented = false
+summary = "군량 독점 세력의 수로·곡창 탈환. 물길과 식량 배급이 회복된다. (콘텐츠 준비 중)"

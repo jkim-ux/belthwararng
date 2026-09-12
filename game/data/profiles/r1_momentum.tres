@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="CombatProfile" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/combat_profile.gd" id="1"]
+[ext_resource type="Resource" path="res://data/attacks/light1_r1.tres" id="2"]
+[ext_resource type="Resource" path="res://data/attacks/light2_r1.tres" id="3"]
+[ext_resource type="Resource" path="res://data/attacks/light3_r1.tres" id="4"]
+
+[resource]
+script = ExtResource("1")
+id = &"r1_momentum"
+display_name = "새 모멘텀 R1"
+description = "전진 12/18/30, 일반 적 밀림 12/18/65 (100/120/180 ms 감속 곡선), 몸·검 연출"
+light_attacks = [ExtResource("2"), ExtResource("3"), ExtResource("4")]

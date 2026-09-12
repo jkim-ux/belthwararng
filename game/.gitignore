@@ -1,0 +1,5 @@
+# Godot 4
+.godot/
+*.import.tmp
+export_presets.cfg
+*.translation

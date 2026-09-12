@@ -1,0 +1,26 @@
+[gd_resource type="Resource" script_class="AttackData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/attack_data.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = &"air_light"
+display_name = "공중 베기"
+startup_ms = 60
+active_ms = 80
+recovery_ms = 120
+chain_window_ms = 0
+move_cancel_ms = 0
+dodge_after_active = false
+damage_mult = 1.0
+strong = false
+hitstun_ms = 300
+knockback = 30
+launch = false
+launch_velocity = 0
+reach_forward = 95
+reach_back = 10
+depth_tolerance = 22
+z_min = -110
+z_max = 30
+dash_distance = 0

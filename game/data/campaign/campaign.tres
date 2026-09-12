@@ -1,0 +1,22 @@
+[gd_resource type="Resource" script_class="CampaignData" load_steps=15 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/campaign_data.gd" id="1"]
+[ext_resource type="Resource" path="res://data/campaign/chapters/ch1.tres" id="2"]
+[ext_resource type="Resource" path="res://data/campaign/chapters/ch2.tres" id="3"]
+[ext_resource type="Resource" path="res://data/campaign/chapters/ch3.tres" id="4"]
+[ext_resource type="Resource" path="res://data/campaign/chapters/ch4.tres" id="5"]
+[ext_resource type="Resource" path="res://data/campaign/chapters/ch5.tres" id="6"]
+[ext_resource type="Resource" path="res://data/campaign/sites/ch1_farm.tres" id="7"]
+[ext_resource type="Resource" path="res://data/campaign/sites/ch1_store.tres" id="8"]
+[ext_resource type="Resource" path="res://data/campaign/sites/ch1_pass.tres" id="9"]
+[ext_resource type="Resource" path="res://data/campaign/companions/aya.tres" id="10"]
+[ext_resource type="Resource" path="res://data/campaign/companions/gen.tres" id="11"]
+[ext_resource type="Resource" path="res://data/campaign/companions/ren.tres" id="12"]
+[ext_resource type="Resource" path="res://data/campaign/companions/toma.tres" id="13"]
+[ext_resource type="Resource" path="res://data/campaign/companions/shino.tres" id="14"]
+
+[resource]
+script = ExtResource("1")
+chapters = [ExtResource("2"), ExtResource("3"), ExtResource("4"), ExtResource("5"), ExtResource("6")]
+sites = [ExtResource("7"), ExtResource("8"), ExtResource("9")]
+companions = [ExtResource("10"), ExtResource("11"), ExtResource("12"), ExtResource("13"), ExtResource("14")]

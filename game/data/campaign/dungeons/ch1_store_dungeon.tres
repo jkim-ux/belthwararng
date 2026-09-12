@@ -1,0 +1,110 @@
+[gd_resource type="Resource" script_class="DungeonDef" load_steps=17 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/dungeon_def.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/data/encounter_wave.gd" id="2"]
+[ext_resource type="Script" path="res://scripts/data/room_def.gd" id="3"]
+
+[sub_resource type="Resource" id="entry"]
+script = ExtResource("3")
+id = &"entry"
+display_name = "입구"
+grid = Vector2i(0, 1)
+kind = &"entry"
+connections = [&"battle_1"]
+waves = []
+
+[sub_resource type="Resource" id="battle_1_w1"]
+script = ExtResource("2")
+enemy_kinds = [&"melee", &"melee", &"melee"]
+spawn_positions = [Vector2(930, 560), Vector2(980, 640), Vector2(910, 480)]
+spawn_delay_ms = 700.0
+
+[sub_resource type="Resource" id="battle_1_w2"]
+script = ExtResource("2")
+enemy_kinds = [&"brute", &"archer", &"archer"]
+spawn_positions = [Vector2(1040, 560), Vector2(1130, 470), Vector2(1150, 650)]
+spawn_delay_ms = 700.0
+
+[sub_resource type="Resource" id="battle_1"]
+script = ExtResource("3")
+id = &"battle_1"
+display_name = "전투 1"
+grid = Vector2i(1, 1)
+kind = &"battle"
+connections = [&"entry", &"battle_2"]
+waves = [SubResource("battle_1_w1"), SubResource("battle_1_w2")]
+
+[sub_resource type="Resource" id="battle_2_w1"]
+script = ExtResource("2")
+enemy_kinds = [&"melee", &"melee", &"thrower"]
+spawn_positions = [Vector2(930, 560), Vector2(980, 640), Vector2(1110, 620)]
+spawn_delay_ms = 700.0
+
+[sub_resource type="Resource" id="battle_2_w2"]
+script = ExtResource("2")
+enemy_kinds = [&"brute", &"melee", &"melee", &"archer", &"thrower"]
+spawn_positions = [Vector2(1040, 560), Vector2(930, 560), Vector2(980, 640), Vector2(1130, 470), Vector2(1110, 620)]
+spawn_delay_ms = 700.0
+
+[sub_resource type="Resource" id="battle_2"]
+script = ExtResource("3")
+id = &"battle_2"
+display_name = "전투 2 (갈림길)"
+grid = Vector2i(2, 1)
+kind = &"battle"
+connections = [&"battle_1", &"battle_3", &"treasure"]
+waves = [SubResource("battle_2_w1"), SubResource("battle_2_w2")]
+
+[sub_resource type="Resource" id="treasure"]
+script = ExtResource("3")
+id = &"treasure"
+display_name = "보물방"
+grid = Vector2i(2, 0)
+kind = &"treasure"
+connections = [&"battle_2"]
+waves = []
+
+[sub_resource type="Resource" id="battle_3_w1"]
+script = ExtResource("2")
+enemy_kinds = [&"melee", &"melee", &"melee", &"archer"]
+spawn_positions = [Vector2(930, 560), Vector2(980, 640), Vector2(910, 480), Vector2(1130, 470)]
+spawn_delay_ms = 700.0
+
+[sub_resource type="Resource" id="battle_3_w2"]
+script = ExtResource("2")
+enemy_kinds = [&"brute", &"melee", &"melee", &"archer", &"thrower"]
+spawn_positions = [Vector2(1040, 560), Vector2(930, 560), Vector2(980, 640), Vector2(1130, 470), Vector2(1110, 620)]
+spawn_delay_ms = 700.0
+
+[sub_resource type="Resource" id="battle_3"]
+script = ExtResource("3")
+id = &"battle_3"
+display_name = "전투 3 (보스 전 경비)"
+grid = Vector2i(3, 1)
+kind = &"battle"
+connections = [&"battle_2", &"boss"]
+waves = [SubResource("battle_3_w1"), SubResource("battle_3_w2")]
+
+[sub_resource type="Resource" id="boss_w1"]
+script = ExtResource("2")
+enemy_kinds = [&"boss"]
+spawn_positions = [Vector2(1000, 560)]
+spawn_delay_ms = 900.0
+
+[sub_resource type="Resource" id="boss"]
+script = ExtResource("3")
+id = &"boss"
+display_name = "보스방"
+grid = Vector2i(4, 1)
+kind = &"boss"
+connections = [&"battle_3"]
+waves = [SubResource("boss_w1")]
+
+[resource]
+script = ExtResource("1")
+rooms = [SubResource("entry"), SubResource("battle_1"), SubResource("battle_2"), SubResource("treasure"), SubResource("battle_3"), SubResource("boss")]
+start_room_id = &"entry"
+boss_display_name = "보급대장"
+boss_max_hp = 550
+chest_heal_ratio = 0.2
+chest_currency = 30

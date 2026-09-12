@@ -1,0 +1,30 @@
+[gd_resource type="Resource" script_class="AttackData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/attack_data.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = &"nakhwagyeok"
+display_name = "내려베기"
+startup_ms = 150
+active_ms = 80
+recovery_ms = 270
+chain_window_ms = 0
+move_cancel_ms = 100
+dodge_after_active = false
+damage_mult = 2.2
+strong = true
+hitstun_ms = 300
+knockback = 0
+knockback_ms = 0
+launch = false
+launch_velocity = 0
+knockdown = true
+lock_after_cancel = true
+reach_forward = 115
+reach_back = 10
+depth_tolerance = 28
+z_min = -10
+z_max = 130
+dash_distance = 0
+swing_style = 4

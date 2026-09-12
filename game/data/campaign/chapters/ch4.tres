@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="ChapterDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/chapter_def.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = &"ch4"
+index = 4
+display_name = "포위된 성"
+prerequisite_chapter_id = &"ch3"
+site_ids = []
+reward_companion_id = &"toma"
+implemented = false
+summary = "대장간과 성하를 거쳐 산성 돌파. 수리·장비 생산과 피난처가 회복된다. (콘텐츠 준비 중)"

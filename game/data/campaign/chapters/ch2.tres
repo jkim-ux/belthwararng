@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="ChapterDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/chapter_def.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = &"ch2"
+index = 2
+display_name = "끊어진 길"
+prerequisite_chapter_id = &"ch1"
+site_ids = []
+reward_companion_id = &"gen"
+implemented = false
+summary = "나루와 교량을 장악한 병력 격퇴. 마을 사이 운송로가 연결된다. (콘텐츠 준비 중)"
