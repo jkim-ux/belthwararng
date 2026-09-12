@@ -36,7 +36,7 @@ extends Resource
 
 @export_group("적")
 @export var enemy_max_hp: int = 65          ## 근접 적. 같은 깊이 평타 1세트(20+20+28=68)로 처치
-@export var enemy_attack_damage: int = 10
+@export var enemy_attack_damage: int = 20      ## HWR-004: 10 → 20 (적 피해 2배)
 @export var enemy_speed_x: float = 150.0
 @export var enemy_speed_y: float = 110.0
 @export var enemy_telegraph_ms: float = 500.0
@@ -56,7 +56,7 @@ extends Resource
 
 @export_group("적 궁수")
 @export var archer_max_hp: int = 55
-@export var archer_damage: int = 8
+@export var archer_damage: int = 16               ## HWR-004: 8 → 16
 @export var archer_telegraph_ms: float = 650.0     ## 사격선 예고(방향·깊이 고정)
 @export var archer_interval_ms: float = 2200.0     ## 발사 간격 최소
 @export var archer_range: float = 560.0
@@ -88,12 +88,12 @@ extends Resource
 @export var fire_radius_y: float = 28.0
 @export var fire_duration_ms: float = 4000.0
 @export var fire_tick_ms: float = 500.0            ## 대상별 피해 주기(첫 피해도 노출 0.5초 뒤)
-@export var fire_damage: int = 3
+@export var fire_damage: int = 6                   ## HWR-004: 3 → 6 (0.5초마다, 4초 최대 8회 = 48)
 @export var fire_max_height: float = 12.0          ## 이 높이 이하일 때만 피해
 
 @export_group("초소 대장")
 @export var captain_max_hp: int = 600
-@export var captain_attack_damage: int = 12
+@export var captain_attack_damage: int = 24     ## HWR-004: 12 → 24
 @export var captain_slash_telegraph_ms: float = 600.0
 @export var captain_slash_active_ms: float = 100.0
 @export var captain_slash_recover_ms: float = 800.0

@@ -44,6 +44,8 @@ func _initialize() -> void:
 		"test_scenario_12_dev_keys_ignored_in_campaign",
 		"test_real_fight_three_sites_two_strategies",
 		"test_game_screens_smoke",
+		# --- HWR-004 R1
+		"test_h4_1_enemy_damage_doubled_on_every_path",
 	]
 	for t in tests:
 		await _run(t)
@@ -710,7 +712,7 @@ func test_d4_enemy_archer_aim_lock_height_depth_sweep_and_shared_slot() -> void:
 		e_between.state_ticks = -100000
 		if p.hp < hp0:
 			break
-	check(p.hp == hp0 - 8 and p.state == &"hitstun", "적중: 피해 8, 경직 (체력 %d, %s)" % [p.hp, p.state])
+	check(p.hp == hp0 - 16 and p.state == &"hitstun", "적중: 피해 16 (HWR-004: 8→16), 경직 (체력 %d, %s)" % [p.hp, p.state])
 	check(e_between.hp == ehp, "적 화살은 같은 팀(사이의 근접병)을 관통")
 	check(b.projectiles.is_empty(), "단일 아군 피해 후 소멸")
 	a.cooldown_ticks = 100000
@@ -720,20 +722,20 @@ func test_d4_enemy_archer_aim_lock_height_depth_sweep_and_shared_slot() -> void:
 	p.change_state(&"ground")
 	hp0 = p.hp
 	var fast := Projectile.new()
-	fast.setup(&"enemy", a, a.arrow, 8.0, Vector2(300, 545), 35.0, 1, 12000.0, 560.0, 10, 4.0, 8.0)
+	fast.setup(&"enemy", a, a.arrow, float(b.tuning.archer_damage), Vector2(300, 545), 35.0, 1, 12000.0, 560.0, 10, 4.0, 8.0)
 	b.add_projectile(fast)
 	idle(b, 1)
-	check(fast.floor_pos.x >= 490.0 and p.hp == hp0 - 8, "200 px/틱 화살이 이동 구간(300→500)에서 x=400 의 주인공 적중 (체력 %d)" % p.hp)
+	check(fast.floor_pos.x >= 490.0 and p.hp == hp0 - 16, "200 px/틱 화살이 이동 구간(300→500)에서 x=400 의 주인공 적중 (체력 %d)" % p.hp)
 	# 최대 사거리 마지막 구간도 판정: 남은 거리 5 px 인 화살이 대상에 닿으면 적중
 	idle(b, 30)
 	place(p, 400, 545)
 	p.change_state(&"ground")
 	hp0 = p.hp
 	var last := Projectile.new()
-	last.setup(&"enemy", a, a.arrow, 8.0, Vector2(360, 545), 35.0, 1, 650.0, 12.0, 10, 4.0, 8.0)
+	last.setup(&"enemy", a, a.arrow, float(b.tuning.archer_damage), Vector2(360, 545), 35.0, 1, 650.0, 12.0, 10, 4.0, 8.0)
 	b.add_projectile(last)
 	idle(b, 2)
-	check(p.hp == hp0 - 8 and b.projectiles.is_empty(), "사거리 12 px 로 끝나는 마지막 구간에서도 적중 후 제거")
+	check(p.hp == hp0 - 16 and b.projectiles.is_empty(), "사거리 12 px 로 끝나는 마지막 구간에서도 적중 후 제거")
 	# 원거리 허가 공유 1: 궁수 2명이 같은 깊이 → 동시에 예고하지 않는다
 	idle(b, 30)
 	p.invuln_ticks = 100000
@@ -936,13 +938,13 @@ func test_d6_fire_damage_timing_overlap_jump_dodge_no_hitstun() -> void:
 	idle(b, 30)
 	check(p.hp == 100 and burns.is_empty(), "노출 뒤 30틱 동안 피해 없음")
 	idle(b, 1)
-	check(p.hp == 97 and burns.size() == 1 and burns[0][0] == t0 + 31, "첫 피해는 노출 확인 틱 + 30 (= 생성 뒤 31틱째) 에 3")
+	check(p.hp == 94 and burns.size() == 1 and burns[0][0] == t0 + 31, "첫 피해는 노출 확인 틱 + 30 (= 생성 뒤 31틱째) 에 6 (HWR-004: 3→6)")
 	var steps := 31
 	while is_instance_valid(fz) and fz.alive and steps < 400:
 		idle(b, 1)
 		steps += 1
 	check(steps == 241, "생성 뒤 241틱째(나이 240 판정 뒤) 제거 (%d)" % steps)
-	check(burns.size() == 8 and p.hp == 100 - 24, "4초 체류: 8회 24 피해 (%d회, 체력 %d)" % [burns.size(), p.hp])
+	check(burns.size() == 8 and p.hp == 100 - 48, "4초 체류: 8회 48 피해 (%d회, 체력 %d)" % [burns.size(), p.hp])
 	check(b.fire_clocks.is_empty(), "불이 없으면 피해 시계 정리")
 	# B. 겹침: 같은 자리 불 2개 → 대상당 주기 하나(초당 6 최대)
 	p.hp = 100
@@ -950,44 +952,44 @@ func test_d6_fire_damage_timing_overlap_jump_dodge_no_hitstun() -> void:
 	b._spawn_fire(Vector2(500, 545))
 	b._spawn_fire(Vector2(520, 545))
 	idle(b, 91)
-	check(burns.size() == 3 and p.hp == 91, "겹친 불 위 91틱: 3회 9 피해 (비중첩) (%d회, 체력 %d)" % [burns.size(), p.hp])
+	check(burns.size() == 3 and p.hp == 82, "겹친 불 위 91틱: 3회 18 피해 (비중첩) (%d회, 체력 %d)" % [burns.size(), p.hp])
 	_expire_fires(b)
 	# C. 나가면 없음, 재진입 시 시계를 초기화하지 않고 예정 주기에 피해(몰아 넣기 없음)
 	b._spawn_fire(Vector2(500, 545))
 	idle(b, 31)
-	check(p.hp == 88, "재생성 불: 31틱째 피해")
+	check(p.hp == 76, "재생성 불: 31틱째 피해")
 	place(p, 300, 545)
 	idle(b, 60)
-	check(p.hp == 88, "불 밖 60틱: 피해 없음")
+	check(p.hp == 76, "불 밖 60틱: 피해 없음")
 	place(p, 500, 545)
 	idle(b, 30)
-	check(p.hp == 85, "재진입 30틱 안에 정확히 1회(예정 주기 유지, 몰아 넣기 없음)")
+	check(p.hp == 70, "재진입 30틱 안에 정확히 1회(예정 주기 유지, 몰아 넣기 없음)")
 	_expire_fires(b)
 	# D. 점프: 예정 틱에 높이 12 초과면 건너뛰고 착지 후 다음 주기에 피해
 	b._spawn_fire(Vector2(500, 545))
 	idle(b, 30)
 	p.height = 40.0
 	idle(b, 1)
-	check(p.hp == 85, "예정 틱에 공중(높이 40) → 건너뜀")
+	check(p.hp == 70, "예정 틱에 공중(높이 40) → 건너뜀")
 	p.height = 0.0
 	idle(b, 30)
-	check(p.hp == 82, "착지 후 다음 주기에 피해")
+	check(p.hp == 64, "착지 후 다음 주기에 피해")
 	_expire_fires(b)
 	# E. 회피 무적: 예정 틱에 무적이면 건너뜀
 	b._spawn_fire(Vector2(500, 545))
 	idle(b, 30)
 	p.invuln_ticks = 3
 	idle(b, 1)
-	check(p.hp == 82, "예정 틱에 무적(회피) → 건너뜀")
+	check(p.hp == 64, "예정 틱에 무적(회피) → 건너뜀")
 	_expire_fires(b)
 	# F. 공격 중 피해: 경직·히트스톱·행동 취소 없음
 	b._spawn_fire(Vector2(500, 545))
 	idle(b, 27)
 	press(b, "attack_light")
 	idle(b, 2)
-	check(p.state == &"light" and p.hp == 82, "평타 진행 중, 아직 피해 없음")
+	check(p.state == &"light" and p.hp == 64, "평타 진행 중, 아직 피해 없음")
 	idle(b, 1)
-	check(p.hp == 79 and p.state == &"light" and p.hitstop_ticks == 0 and p.hitstun_ticks == 0, "평타 중 불 피해 3: 경직·히트스톱·취소 없음 (%s)" % p.state)
+	check(p.hp == 58 and p.state == &"light" and p.hitstop_ticks == 0 and p.hitstun_ticks == 0, "평타 중 불 피해 6: 경직·히트스톱·취소 없음 (%s)" % p.state)
 	# G. 적은 자기 불에 피해 없음 (평타가 끝난 뒤 생성)
 	idle(b, 30)
 	var e := b.spawn_melee_enemy(Vector2(500, 545))
@@ -1845,6 +1847,72 @@ func test_real_fight_three_sites_two_strategies() -> void:
 			fight_reports.append("%s [%s] %s %.1f초 체력 %d/%d 받은 피해 %d 처치 %d | %s" % [site_id, strategy, r.outcome, r.ticks / 60.0, r.hp, r.max_hp, r.damage, r.kills, " · ".join(parts)])
 			b.queue_free()
 			await process_frame
+
+# ------------------------------------------------------------------ HWR-004 R1 검수 1: 적 피해 2배(모든 경로), 아야·플레이어 피해 유지
+
+func test_h4_1_enemy_damage_doubled_on_every_path() -> void:
+	var b: Battle = await make_battle()
+	b.start_encounter(data.site(&"ch1_pass"), "run_h4_dmg", data.companion(&"aya"), 20.0, 100)
+	settle(b)
+	var p := b.player
+	var comp := b.companion
+	check(b.tuning.enemy_attack_damage == 20 and b.tuning.archer_damage == 16 and b.tuning.captain_attack_damage == 24 and b.tuning.fire_damage == 6, "조정값 근접 20 / 화살 16 / 보스 24 / 불 6")
+	# 근접병 베기 → 주인공 20, 동료 20 (같은 새 피해)
+	place(p, 400, 545)
+	place(comp, 400, 600)
+	comp.change_state(&"follow")
+	var e := b.spawn_melee_enemy(Vector2(460, 545))
+	e.change_state(&"idle")
+	e.facing = -1
+	e.change_state(&"attack")
+	idle(b, 2)
+	check(p.hp == 80, "근접병 → 주인공 20 (체력 %d)" % p.hp)
+	idle(b, 60)
+	place(comp, 400, 545)
+	comp.change_state(&"follow")
+	place(p, 200, 700)
+	p.change_state(&"ground")
+	e.facing = -1
+	place(e, 460, 545)
+	e.change_state(&"attack")
+	idle(b, 2)
+	check(comp.hp == 40, "근접병 → 동료 20 (체력 %d)" % comp.hp)
+	b.enemies.erase(e)
+	e.free()
+	# 보스 베기 → 24 (Battle.step 경로)
+	idle(b, 60)
+	place(p, 400, 545)
+	p.change_state(&"ground")
+	var boss := b.spawn_captain(Vector2(480, 545))
+	boss.facing = -1
+	boss.current_pattern = 0
+	boss.change_state(&"attack")
+	idle(b, 2)
+	check(p.hp == 56, "보스 베기 → 24 (체력 %d)" % p.hp)
+	b.enemies.erase(boss)
+	boss.free()
+	# 불 한 틱 6
+	idle(b, 60)
+	place(p, 300, 545)
+	p.change_state(&"ground")
+	b._spawn_fire(Vector2(300, 545))
+	idle(b, 32)
+	check(p.hp == 50, "불 한 틱 → 6 (체력 %d)" % p.hp)
+	# 플레이어 평타 20·아야 화살 7 은 그대로
+	for fz in b.fires:
+		fz.finish()
+	b.fires.clear()
+	place(p, 300, 545)
+	p.change_state(&"ground")
+	var e2 := b.spawn_melee_enemy(Vector2(370, 545))
+	e2.hp = 1000
+	e2.max_hp = 1000
+	e2.change_state(&"idle")
+	press(b, "attack_light")
+	idle(b, 8)
+	check(e2.total_damage_taken == 20, "플레이어 평타 20 유지 (%d)" % e2.total_damage_taken)
+	check(is_equal_approx(comp.def.attack_damage, 7.0), "아야 화살 7 유지")
+	b.queue_free()
 
 # ------------------------------------------------------------------ 화면 흐름
 

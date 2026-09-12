@@ -294,7 +294,7 @@ func test_dodge_invulnerability(b: Battle) -> void:
 	e.facing = -1
 	e.change_state(&"attack")
 	idle(b, 3)
-	check(p.hp == p.max_hp - 10 and p.state == &"hitstun", "무적 종료 후 피해 10 (hp %d, %s)" % [p.hp, p.state])
+	check(p.hp == p.max_hp - 20 and p.state == &"hitstun", "무적 종료 후 피해 20 (HWR-004: 근접 10→20) (hp %d, %s)" % [p.hp, p.state])
 	# 회피 재사용 대기
 	idle(b, 20)
 	press(b, "dodge")
