@@ -1,29 +1,25 @@
 # 사무라이 점령전 기획과 개발 전달 문서
 
-사무라이가 마을 하나에서 반격을 시작해 점령지를 탈환하는 벨트스크롤 액션 게임이다. 전체 5챕터, 챕터마다 전투 동료 1명을 해금한다. 주민은 농사·보급·복구를 맡는다.
+사무라이가 첫 마을에서 반격을 시작해 점령지를 되찾는 벨트스크롤 액션 게임이다. 전체 5챕터, 챕터마다 전투 동료 1명 해금이 목표다. 주민은 농사·보급·복구를 맡는다.
 
-## 처음 읽을 파일
+## 현재 작업
+현재 기획은 **v0.3**, 구현 지시는 **HWR-002 R1**이다. 이전 초안으로 진행한 구현은 보존하며 수정 사항을 적용한다.
+이번 범위는 평타 모멘텀, 1챕터3거점 탈환, 마을 정비/시설/저장, 궁수 동료 합류 후 재도전이다.
 
-| 파일 | 용도 |
+| 파일 | 역할 |
 | --- | --- |
-| [TO_CLAUDE.md](TO_CLAUDE.md) | 현재 작업 번호와 최신 지시서 위치 |
-| [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) | 전체 기획과 단계별 완성 기준 |
-| [CLAUDE.md](CLAUDE.md) | 개발 작업의 공통 진행 규칙 |
-| handoffs/ | 작성 날짜와 시각이 붙은 개별 작업 지시 |
-| [reports/README.md](reports/README.md) | 개발 결과를 기록하는 방법 |
+| [TO_CLAUDE.md](TO_CLAUDE.md) | 현재 지시의 고정 진입점 |
+| [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) | 세계·5챕터·전체 범위 |
+| [docs/COMBAT_FEEL.md](docs/COMBAT_FEEL.md) | 모멘텀 수치·규칙·비교 검증 |
+| [docs/CAMPAIGN_SYSTEMS.md](docs/CAMPAIGN_SYSTEMS.md) | 마을·경제·동료·보상·저장 |
+| [CLAUDE.md](CLAUDE.md) | 개발 공통 진행 규칙 |
+| [reports/README.md](reports/README.md) | 완료 보고 형식 |
 
-## 함께 작업하는 방식
+## 기존 구현과 실행
+확인 당시 M1 코드는 [claude/upbeat-mayer-r3t54f 브랜치](https://github.com/jkim-ux/belthwararng/tree/claude/upbeat-mayer-r3t54f/game)에 있고 [게임 실행 안내](https://github.com/jkim-ux/belthwararng/blob/claude/upbeat-mayer-r3t54f/game/README.md)를 제공한다. [초안 PR #1](https://github.com/jkim-ux/belthwararng/pull/1)은 검토 시점에 미병합이다.
+main에 game/가 아직 없다고 게임을 새로 작성하지 않는다. 실제 최신 구현/브랜치/보고를 확인하고 이어서 작업한다. 구현이 병합되면 기존 game/README.md 실행 안내를 유지한다.
 
-기획 담당은 최신 코드와 완료 보고를 확인하고, 기획 또는 다음 작업 지시를 Git에 반영한다. 개발 담당은 원격 변경을 안전하게 반영한 뒤 TO_CLAUDE.md에서 현재 작업을 확인한다. 사용자는 실제 게임을 플레이하며 조작감과 재미를 판단한다.
-
-새 작업을 만들 때는 handoffs/에 고유한 작업 번호와 한국시간이 포함된 문서를 추가하고 TO_CLAUDE.md의 링크를 바꾼다. 기존 지시서는 기록으로 남긴다. 진행 중인 작업의 요구가 바뀌면 새 수정 지시에서 이전 작업 번호와 변경 내용을 명시한다.
-
-개발 결과는 reports/에 같은 작업 번호로 남긴다. 이전 결과를 확인한 뒤 다음 작업을 발행한다. Git에 문서를 올리는 행위가 Claude를 자동으로 실행시키지는 않는다. 사용자가 개발 도구에 현재 작업을 읽고 수행하도록 요청한다.
-
-## 사용자용 시작 문장
-
-작업 폴더의 미커밋 변경을 보존하면서 원격 저장소의 최신 변경을 반영해. TO_CLAUDE.md에 적힌 현재 작업 번호와 연결된 지시서를 확인하고, 프로젝트의 기존 지침을 지키면서 구현해. 완료하면 reports/에 결과를 남겨.
-
-## 현재 범위
-
-현재 기획은 v0.2, 지시는 HWR-002다. M1 게임 구현은 확인 당시 claude/upbeat-mayer-r3t54f 브랜치의 game/에 있다. 다음 구현은 평타 모멘텀, 1챕터 3거점 탈환·관리·궁수 동료 합류다. 저장소 주소는 https://github.com/jkim-ux/belthwararng 이며, 최초 문서는 main 브랜치를 기준으로 한다. 이후 작업에서는 기존 파일과 미커밋 변경을 먼저 확인한다.
+## 전달 방식
+기획 담당은 최신 코드와 결과 보고를 확인하고 날짜·한국시간·수정 번호가 있는 지시를 발행한다. 개발 담당은 사용자 변경을 보존하면서 원격 기획을 반영하고 현재 지시를 구현한다. 사용자는 플레이로 조작감과 재미를 판단한다.
+이전 기획은 docs/archive/, 이전 지시는 handoffs/에 남긴다. 완료 보고는 reports/HWR-002.md처럼 같은 작업 번호를 쓰되 적용 수정 번호를 기록한다. 날짜만 비교하지 말고 TO_CLAUDE.md의 링크를 따른다.
+문서 게시가 개발 도구를 자동으로 실행하지는 않는다. Claude에는 'main의 최신 TO_CLAUDE.md를 읽고 HWR-002 R1을 기존 구현에 이어서 진행해'라고 전달하면 된다.
