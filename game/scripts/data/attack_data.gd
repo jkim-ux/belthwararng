@@ -49,6 +49,12 @@ enum Swing { LEGACY = 0, HORIZONTAL = 1, HORIZONTAL_REVERSE = 2, DIAGONAL_DOWN =
 @export var ellipse_rx: float = 110.0
 @export var ellipse_ry: float = 45.0
 
+@export_group("HWR-004 흘려받기 (E)")
+## true 면 이 동작은 공격이 아니라 방어 창이다: startup_ms 동안 정면 방어(반격 가능 공격/화살 1회), 실패 시 recovery_ms 회복.
+@export var guard: bool = false
+## 방어 성공 시 다음 틱 t=0 으로 시작하는 반격 동작(재사용을 다시 걸지 않는다)
+@export var counter_attack: AttackData
+
 @export_group("HWR-004 다단히트 (일섬연무)")
 ## 0 이면 단일 타격(기존). 양수면 타격 구간 안에서 interval 간격으로 N 개의 타격을 각각 hit_index 로 만든다.
 @export var multi_hits: int = 0

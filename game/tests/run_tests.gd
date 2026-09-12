@@ -49,6 +49,10 @@ func _initialize() -> void:
 		"test_h4_skill_w_pierce_order_limits_and_reactions",
 		"test_h4_new_skill_cancel_lock_cooldown_and_air",
 		"test_h4_skill_damage_at_attack_21",
+		# --- HWR-004 R1: E/R
+		"test_h4_e_window_front_back_same_tick_fire",
+		"test_h4_e_arrows_boss_charge_brute_combo",
+		"test_h4_r_five_hits_once_no_cancel_and_interrupt",
 	]
 	for t in tests:
 		await _run(t)
@@ -242,11 +246,19 @@ func test_expired_input_does_not_fire(b: Battle) -> void:
 func test_unimplemented_skill_ignored(b: Battle) -> void:
 	var p := b.player
 	place(p, 300, 540)
-	# HWR-004 3단계: D/F/Q/W 구현. E/R 은 4단계에서 구현한다.
-	for a in ["skill_e", "skill_r"]:
-		press(b, a)
-		idle(b, 2)
-		check(p.state == &"ground" and p.buffered_action == &"", "미구현 %s 은 무시되고 보관도 안 됨 (state %s)" % [a, p.state])
+	# HWR-004: 8개 모두 구현. 미구현 표시로 남은 슬롯이 없어야 하고, 미구현 규칙 자체는 유지된다(임시 SkillData 로 확인).
+	for sd in p.skill_set.skills:
+		check(sd.implemented and sd.attack != null, "%s(%s) 구현·공격 데이터 연결" % [sd.display_name, sd.key_label])
+	var fake := SkillData.new()
+	fake.id = &"fake"
+	fake.action_name = &"skill_r"
+	fake.implemented = false
+	var real: SkillData = p.skills_by_action[&"skill_r"]
+	p.skills_by_action[&"skill_r"] = fake
+	press(b, "skill_r")
+	idle(b, 2)
+	check(p.state == &"ground" and p.buffered_action == &"", "미구현 슬롯 입력은 무시되고 보관도 안 됨 (state %s)" % p.state)
+	p.skills_by_action[&"skill_r"] = real
 
 func test_skill_cooldown(b: Battle) -> void:
 	var p := b.player
@@ -1270,7 +1282,7 @@ func test_h4_skill_damage_at_attack_21(b: Battle) -> void:
 	var p := b.player
 	var d := b.dummy
 	p.attack_power = 21.0
-	var expected := {"d": 46, "f": 38, "q": 63, "w": 34}
+	var expected := {"d": 46, "f": 38, "q": 63, "w": 34, "r": 105}
 	for key in expected.keys():
 		place(p, 300, 540)
 		place(d, 380, 540)
@@ -1280,6 +1292,328 @@ func test_h4_skill_damage_at_attack_21(b: Battle) -> void:
 		var sd := skill(b, key)
 		p.cooldowns[sd.id] = 0
 		press(b, "skill_" + key)
-		idle(b, 40)
+		idle(b, 80)
 		check(d.total_damage_taken == expected[key], "공격력 21: %s 피해 %d == %d" % [key, d.total_damage_taken, expected[key]])
 		idle(b, 60)
+
+# ------------------------------------------------------------------ HWR-004 R1: E 흘려받기
+
+func enemy_facing_player(b: Battle, x: float, y: float) -> MeleeEnemy:
+	var e := big_enemy(b, x, y)
+	e.facing = -1 if x > b.player.floor_pos.x else 1
+	return e
+
+func test_h4_e_window_front_back_same_tick_fire(b: Battle) -> void:
+	var p := b.player
+	var se := skill(b, "e")
+	check(se.attack.guard and se.attack.startup_ticks() == 12 and se.attack.recovery_ticks() == 18 and se.cooldown_ticks() == 840, "흘려받기 방어 12 + 회복 18 틱, 재사용 840틱")
+	var ctr: AttackData = se.attack.counter_attack
+	check(ctr != null and ctr.startup_ticks() == 3 and ctr.active_ticks() == 5 and ctr.recovery_ticks() == 10 and is_equal_approx(ctr.damage_mult, 2.5), "반격 3/5/10 틱, 250%")
+	place(p, 400, 540)
+	p.facing = 1
+	var e := enemy_facing_player(b, 470, 540)
+	# t11 성공: 방어 t=10 에 적이 공격 상태로 들어가 다음 틱(t=11)에 판정
+	press(b, "skill_e")
+	check(p.state == &"guard" and p.guard_window_open() and p.cooldown_for(se) == 840, "방어 창 열림·재사용 적용")
+	idle(b, 10)
+	e.change_state(&"attack")
+	idle(b, 1)
+	check(p.hp == 100 and p.parries == 1 and p.guard_consumed and p.state == &"guard" and e.state == &"attack" and e.active_hitboxes[0].already_hit(p), "t11 정면 베기 방어 성공: 피해 0, 처리 완료 기록, 적은 동작 진행")
+	check(p.hitstop_ticks == 0 and e.hitstop_ticks == 0, "방어 성공 자체에는 양쪽 타격 정지 0")
+	idle(b, 1)
+	check(p.state == &"skill" and p.current_attack == ctr and p.attack_t() == 0 and p.counters_started == 1, "다음 틱 t=0 으로 반격 시작 (%s)" % p.state)
+	var cd_after := p.cooldown_for(se)
+	idle(b, 4)   # 같은 베기의 남은 활성 틱(총 6) 동안 재피해 없음, 반격 t=3 적중
+	check(p.hp == 100, "같은 근접 타격의 다음 활성 틱 재피해 0")
+	check(e.total_damage_taken == 50 and e.state == &"hitstun" and e.hitstun_ticks == 21 and e.knockback_total == 0.0, "반격 50, 일반 적 350ms 경직·밀림 0 (%d, %s)" % [e.total_damage_taken, e.state])
+	check(p.cooldown_for(se) == cd_after - 4, "반격 시작 시 재사용을 다시 걸지 않음")
+	# 반격 t8 부터 회피, t12 부터 이동, 그 전에는 이동 불가 (적중 히트스톱 2틱 동안 t 는 멈춘다)
+	while p.attack_t() < 6:
+		idle(b, 1)
+	b.step(PlayerInput.make(Vector2(-1, 0)))   # t=7: 이동 취소 불가
+	check(p.state == &"skill" and p.attack_t() == 7, "반격 t7: 이동 취소 불가")
+	p.dodge_cooldown_ticks = 0
+	press(b, "dodge", Vector2(-1, 0))   # t=8: 회피 가능
+	check(p.state == &"dodge" and p.action_lock_ticks == 18 - 8 and p.counters_started == 1, "반격 t8 회피 연결, 남은 제한 %d틱" % p.action_lock_ticks)
+	idle(b, 30)
+	# t12 실패: 방어 t=11 에 적 공격 → t=12 판정 → 정상 피해·경직
+	place(p, 400, 540)
+	p.facing = 1
+	p.change_state(&"ground")
+	e.change_state(&"idle")
+	e.state_ticks = -1000000
+	place(e, 470, 540)
+	e.facing = -1
+	p.cooldowns[se.id] = 0
+	press(b, "skill_e")
+	idle(b, 11)
+	e.change_state(&"attack")
+	idle(b, 1)
+	check(p.hp == 80 and p.state == &"hitstun" and p.parries == 1, "t12 는 실패 회복: 피해 20·경직 (체력 %d, %s)" % [p.hp, p.state])
+	idle(b, 40)
+	# 뒤쪽 공격은 방어 불가
+	place(p, 400, 540)
+	p.facing = 1
+	p.change_state(&"ground")
+	var back := enemy_facing_player(b, 330, 540)
+	back.facing = 1
+	e.change_state(&"idle")
+	e.state_ticks = -1000000
+	place(e, 1100, 700)
+	p.cooldowns[se.id] = 0
+	press(b, "skill_e")
+	idle(b, 2)
+	back.change_state(&"attack")
+	idle(b, 1)
+	check(p.hp == 60 and p.state == &"hitstun" and p.parries == 1, "뒤쪽 베기: 방어 실패·정상 피해 (체력 %d)" % p.hp)
+	idle(b, 40)
+	b.enemies.erase(back)
+	back.free()
+	# 같은 틱 정면 근접 + 정면 화살: 근접 판정이 먼저이므로 근접만 방어, 화살은 피해 → 실제 경직 → 반격 예약 폐기
+	place(p, 400, 540)
+	p.facing = 1
+	p.change_state(&"ground")
+	place(e, 470, 540)
+	e.facing = -1
+	e.change_state(&"idle")
+	e.state_ticks = -1000000
+	var archer := b.spawn_archer_enemy(Vector2(900, 540))
+	archer.change_state(&"idle")
+	archer.state_ticks = -1000000
+	p.cooldowns[se.id] = 0
+	press(b, "skill_e")
+	idle(b, 2)
+	e.change_state(&"attack")
+	var arrow := Projectile.new()
+	arrow.setup(&"enemy", archer, archer.arrow, float(b.tuning.archer_damage), Vector2(500, 540), 35.0, -1, 12000.0, 560.0, 10, 4.0, 8.0)
+	b.add_projectile(arrow)
+	var ctr_before := p.counters_started
+	idle(b, 1)
+	check(p.parries == 2 and p.hp == 60 - 16 and p.state == &"hitstun", "같은 틱: 근접 1회만 방어, 화살 16 피해·경직 (체력 %d, %s)" % [p.hp, p.state])
+	idle(b, 1)
+	check(p.counters_started == ctr_before and p.state == &"hitstun", "실제 경직이면 반격 0회")
+	idle(b, 40)
+	b.enemies.erase(archer)
+	archer.free()
+	# 방어 성공 + 같은 틱 불 6 만 받으면 반격 1회. 불은 방어 창을 소모하지 않는다.
+	place(p, 400, 540)
+	p.facing = 1
+	p.change_state(&"ground")
+	place(e, 470, 540)
+	e.facing = -1
+	e.change_state(&"idle")
+	e.state_ticks = -1000000
+	e.total_damage_taken = 0
+	p.cooldowns[se.id] = 0
+	var fz := b._spawn_fire(Vector2(400, 540))
+	press(b, "skill_e")
+	idle(b, 2)
+	b.fire_clocks[p.get_instance_id()] = b.tick + 1
+	e.change_state(&"attack")
+	var hp0 := p.hp
+	idle(b, 1)
+	check(p.parries == 3 and p.hp == hp0 - 6 and p.state == &"guard", "방어 성공 + 같은 틱 불 6: 방어 창 유지 상태로 HP 만 감소 (체력 %d, %s)" % [p.hp, p.state])
+	idle(b, 1)
+	check(p.state == &"skill" and p.current_attack == ctr, "불만 받았으면 반격 1회 실행")
+	idle(b, 5)
+	check(e.total_damage_taken == 50, "반격 적중 50")
+	fz.finish()
+	b.fires.clear()
+	b.fire_clocks.clear()
+	# 방어 창 중 자발적 취소 없음 / 실패 회복 t24 이동 취소 + 남은 제한 6
+	idle(b, 40)
+	place(p, 400, 540)
+	p.change_state(&"ground")
+	place(e, 1100, 700)
+	e.change_state(&"idle")
+	e.state_ticks = -1000000
+	p.cooldowns[se.id] = 0
+	p.dodge_cooldown_ticks = 0
+	press(b, "skill_e")
+	for i in 11:
+		b.step(PlayerInput.make(Vector2(1, 0), ["dodge"]))
+	check(p.state == &"guard" and p.attack_t() == 11 and absf(p.floor_pos.x - 400.0) < 0.001, "방어 창 중 이동/회피 취소 없음 (t=%d)" % p.attack_t())
+	idle(b, 12)   # t=23
+	b.step(PlayerInput.make(Vector2(1, 0), ["skill_a"]))   # t=24 이동 취소
+	check(p.state == &"ground" and p.action_lock_ticks == 6 and p.last_guard_result == "흘려받기 실패", "실패 회복 t24 이동 취소, 남은 제한 6 (%s)" % p.state)
+	hold(b, Vector2(1, 0), 5)
+	check(p.state == &"ground" and p.cooldown_for(skill(b, "a")) == 0, "원래 종료(t30) 전 A 미실행")
+	hold(b, Vector2(1, 0), 1)
+	check(p.state == &"skill" and p.current_skill == skill(b, "a"), "t30 에 보관한 A 실행")
+
+func test_h4_e_arrows_boss_charge_brute_combo(b: Battle) -> void:
+	var p := b.player
+	var se := skill(b, "e")
+	var ctr: AttackData = se.attack.counter_attack
+	place(p, 400, 540)
+	p.facing = 1
+	var archer := b.spawn_archer_enemy(Vector2(900, 540))
+	archer.change_state(&"idle")
+	archer.state_ticks = -1000000
+	# 정면 고속 화살(한 틱에 뒤까지 통과): 진행 방향으로 정면 판정 → 성공·화살 제거·사수 원격 피해 없음
+	press(b, "skill_e")
+	var fast := Projectile.new()
+	fast.setup(&"enemy", archer, archer.arrow, float(b.tuning.archer_damage), Vector2(600, 540), 35.0, -1, 12000.0, 560.0, 10, 4.0, 8.0)
+	b.add_projectile(fast)
+	idle(b, 1)
+	check(p.hp == 100 and p.parries == 1 and b.projectiles.is_empty() and archer.hp == archer.max_hp, "고속 정면 화살 방어 성공·제거, 궁수 피해 없음")
+	idle(b, 1)
+	check(p.state == &"skill" and p.current_attack == ctr, "화살 방어 뒤 반격 시작(허공)")
+	idle(b, 20)
+	check(archer.hp == archer.max_hp, "먼 궁수에게 반격 피해 없음")
+	# 뒤쪽 화살은 방어 불가
+	idle(b, 20)
+	place(p, 400, 540)
+	p.facing = 1
+	p.change_state(&"ground")
+	p.cooldowns[se.id] = 0
+	press(b, "skill_e")
+	var back := Projectile.new()
+	back.setup(&"enemy", archer, archer.arrow, float(b.tuning.archer_damage), Vector2(300, 540), 35.0, 1, 650.0, 560.0, 30, 4.0, 8.0)
+	b.add_projectile(back)
+	idle(b, 8)
+	check(p.hp == 84 and p.state == &"hitstun", "뒤쪽 화살: 피해 16 (체력 %d)" % p.hp)
+	idle(b, 40)
+	b.enemies.erase(archer)
+	archer.free()
+	# 강인병 내려찍기(parryable=false)는 방어 불가
+	place(p, 400, 540)
+	p.facing = 1
+	p.change_state(&"ground")
+	var br := b.spawn_brute_enemy(Vector2(470, 540))
+	br.facing = -1
+	br.current_pattern = 1
+	p.cooldowns[se.id] = 0
+	press(b, "skill_e")
+	idle(b, 2)
+	br.change_state(&"attack")
+	idle(b, 1)
+	check(p.hp == 84 - 24 and p.state == &"hitstun", "내려찍기: 방어 불가·24 피해 (체력 %d)" % p.hp)
+	idle(b, 80)
+	# 강인병 2연격: 첫 타 방어 → 강인병 계속 진행(두 번째 타 생성) → 반격 t8 회피로 두 번째 타 회피
+	place(p, 400, 540)
+	p.facing = 1
+	p.change_state(&"ground")
+	place(br, 470, 540)
+	br.facing = -1
+	br.current_pattern = 0
+	br.change_state(&"idle")
+	b.release_attack_slot(br)
+	br.hits_created = 0
+	p.cooldowns[se.id] = 0
+	p.dodge_cooldown_ticks = 0
+	press(b, "skill_e")
+	idle(b, 2)
+	br.change_state(&"attack")
+	var hp1 := p.hp
+	idle(b, 1)
+	check(p.hp == hp1 and p.parries == 2 and br.state == &"attack", "2연격 첫 타 방어, 강인병 진행")
+	idle(b, 1)   # 반격 t0
+	while p.state == &"skill" and p.attack_t() < 7:
+		idle(b, 1)
+	press(b, "dodge", Vector2(-1, 0))   # 반격 t8
+	check(p.state == &"dodge", "반격 t8 회피 연결 (%s)" % p.state)
+	idle(b, 30)
+	check(p.hp == hp1 and br.hits_created == 2, "두 번째 타(15틱 뒤)는 회피로 피함, 강인병은 두 타를 모두 만듦 (체력 %d, 타격 %d)" % [p.hp, br.hits_created])
+	b.enemies.erase(br)
+	br.free()
+	# 보스 돌진: 방어해도 보스는 계속 돌진하고 같은 돌진으로 재피해 없음
+	idle(b, 20)
+	place(p, 500, 540)
+	p.facing = 1
+	p.change_state(&"ground")
+	var boss := b.spawn_captain(Vector2(700, 540))
+	boss.facing = -1
+	boss.current_pattern = 1
+	boss.charge_remaining = 300.0
+	p.cooldowns[se.id] = 0
+	press(b, "skill_e")
+	boss.change_state(&"attack")
+	var hp2 := p.hp
+	var parried_at := -1
+	for i in 30:
+		idle(b, 1)
+		if parried_at < 0 and p.parries == 3:
+			parried_at = i
+	check(parried_at >= 0 and parried_at < 12 and p.hp == hp2, "보스 돌진 방어 성공 (t=%d), 재피해 0 (체력 %d)" % [parried_at + 1, p.hp])
+	check(boss.state == &"recover" and boss.floor_pos.x < 500.0, "보스는 멈추지 않고 끝까지 돌진 (%s, x %.0f)" % [boss.state, boss.floor_pos.x])
+
+# ------------------------------------------------------------------ HWR-004 R1: R 일섬연무
+
+func test_h4_r_five_hits_once_no_cancel_and_interrupt(b: Battle) -> void:
+	var p := b.player
+	var sr := skill(b, "r")
+	check(sr.attack.startup_ticks() == 9 and sr.attack.active_ticks() == 27 and sr.attack.recovery_ticks() == 24 and sr.attack.total_ticks() == 60 and sr.cooldown_ticks() == 2100, "일섬연무 9/27/24 = 60틱, 재사용 2100틱")
+	place(p, 300, 540)
+	place(b.dummy, 1200, 700)
+	place(b.knockback_dummy, 1200, 720)
+	var e := big_enemy(b, 400, 540)
+	var hit_ticks: Array = []
+	var hit_t: Array = []
+	var kbs: Array = []
+	b.hit_applied.connect(func(a, _t, i): if a == p: hit_ticks.append(b.tick); hit_t.append(i.hit_index); kbs.append(i.knockback))
+	var hb_ids := {}
+	var moved := false
+	press(b, "skill_r")
+	var x0 := p.floor_pos.x
+	var t_states: Array = []
+	for i in 120:
+		for hb in p.active_hitboxes:
+			hb_ids[hb.instance_id] = hb.hit_index
+		if p.state == &"skill":
+			t_states.append(p.attack_t())
+		# t<50 동안 매 틱 이동 + 회피 + 다른 스킬 입력: 자발적 취소 없음. 그 뒤엔 입력 없이 종료(보관 만료)
+		if p.attack_t() < 50:
+			b.step(PlayerInput.make(Vector2(1, 0), ["dodge", "skill_a"]))
+		else:
+			idle(b, 1)
+		if absf(p.floor_pos.x - x0) > 0.001:
+			moved = true
+		if p.state != &"skill":
+			break
+	check(hit_t == [0, 1, 2, 3, 4] and e.total_damage_taken == 100, "5타 각 1회, 총 100 (%s, %d)" % [str(hit_t), e.total_damage_taken])
+	check(hb_ids.size() == 5, "만든 판정은 정확히 5개(통짜 판정·히트스톱 중 재생성 없음) (%d)" % hb_ids.size())
+	check(kbs.slice(0, 4) == [0.0, 0.0, 0.0, 0.0] and kbs[4] == 40.0, "마지막 타만 40px 밀림 (%s)" % str(kbs))
+	check(e.hitstun_ticks == 12 and e.knockback_total == 40.0, "일반 적 각 타 200ms 경직, 마지막 밀림 40")
+	check(not moved and t_states.max() == 59, "준비~종료(t59)까지 이동/회피/스킬 취소 없음 (이동 %s)" % str(moved))
+	check(hit_ticks[1] - hit_ticks[0] >= 6 and hit_ticks[4] - hit_ticks[0] >= 24, "타격 간격 ≥ 6틱(히트스톱 포함 실제 %s)" % str(hit_ticks))
+	check(p.cooldown_for(sr) > 0 and p.state == &"ground", "종료 후 지상·재사용 중")
+	# 실제 경직이면 남은 타격 취소
+	idle(b, 30)
+	place(p, 300, 540)
+	place(e, 400, 540)
+	e.change_state(&"idle")
+	e.state_ticks = -1000000
+	e.total_damage_taken = 0
+	var hitter := enemy_facing_player(b, 240, 540)
+	hitter.facing = 1
+	p.cooldowns[sr.id] = 0
+	press(b, "skill_r")
+	idle(b, 16)   # 2타까지 적중
+	hitter.change_state(&"attack")
+	idle(b, 1)
+	check(p.state == &"hitstun" and p.active_hitboxes.is_empty(), "피격 시 R 중단·판정 정리 (%s)" % p.state)
+	idle(b, 60)
+	check(e.total_damage_taken == 40, "중단 뒤 남은 타격 없음 (피해 %d == 40)" % e.total_damage_taken)
+	b.enemies.erase(hitter)
+	hitter.free()
+	# 보스 예고 중 5타: 피격 타격 정지 0 이라 예고 36틱 유지
+	idle(b, 30)
+	b.enemies.erase(e)
+	e.free()
+	place(p, 300, 540)
+	p.change_state(&"ground")
+	var boss := b.spawn_captain(Vector2(400, 540))
+	boss.facing = -1
+	boss.current_pattern = 0
+	boss.change_state(&"telegraph")
+	p.invuln_ticks = 100000
+	p.cooldowns[sr.id] = 0
+	press(b, "skill_r")
+	var tele := 0
+	while boss.state == &"telegraph" and tele < 100:
+		idle(b, 1)
+		tele += 1
+	check(tele == 35, "R 를 맞는 동안 보스 예고 36틱 유지(시작 틱 제외 %d)" % tele)
+	idle(b, 30)
+	check(boss.hp == 500 and boss.hitstop_ticks == 0, "R 5타 피해 100, 보스 피격 타격 정지 0 (hp %d)" % boss.hp)

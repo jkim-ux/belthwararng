@@ -1,7 +1,7 @@
 class_name Player
 extends BattleActor
 ## 주인공(사무라이) 조작. 입력 보관, 지상 이동, 점프 높이, 회피, 평타 3연격, 스킬 실행을 담당한다.
-## 상태: ground, air, dodge, light, air_attack, skill, hitstun, dead
+## 상태: ground, air, dodge, light, air_attack, skill, guard(흘려받기 방어 창·실패 회복), hitstun, dead
 ## R1: 지상 평타는 타격 구간 동안 감속 곡선으로 전진한다(AttackData.advance_px). 전진량은 틱마다 곡선에서
 ## 계산하므로 취소·피격·경계로 공격이 끝나면 남은 전진은 자동으로 폐기되고 다음 행동에 새지 않는다.
 ## HWR-004 R1: 시전마다 action_id 를 올리고 발사/다단히트 이벤트에 실행 완료 표시를 둔다(히트스톱·취소·재진입 반복 금지).
@@ -45,6 +45,14 @@ var action_lock_ticks: int = 0            ## 이동·회피 취소 뒤 남은 �
 var projectile_fired: bool = false        ## 이번 시전에서 투사체를 이미 발사했는가
 var multi_fired: Array[int] = []          ## 이번 시전에서 이미 만든 다단히트 순번
 var skill_uses: Dictionary = {}           ## skill id -> 실제 시전 횟수(난도 보고용)
+# 흘려받기(E)
+var guard_facing: int = 1                 ## 방어·반격까지 고정한 방향
+var guard_consumed: bool = false          ## 이번 방어 창을 이미 소비했는가(같은 틱 여러 공격을 모두 막지 않음)
+var pending_counter: bool = false         ## 방어 성공 → 다음 전투 틱에 반격 시작 예약(같은 틱 실제 경직/사망이면 폐기)
+var parries: int = 0                      ## 방어 성공 횟수
+var counters_started: int = 0
+var guard_fx_ticks: int = 0               ## HUD 표시용(성공/실패 문구 남는 시간)
+var last_guard_result: String = ""
 
 func _init() -> void:
 	team = &"player"
@@ -107,9 +115,11 @@ func reset_transients() -> void:
 	multi_fired.clear()
 	_reset_guard()
 
-## 흘려받기 상태 정리(4단계에서 구현)
+## 흘려받기 상태 정리: 방어 창·반격 예약을 버린다(방 전이·출정 종료·초기화)
 func _reset_guard() -> void:
-	pass
+	guard_consumed = false
+	pending_counter = false
+	guard_fx_ticks = 0
 
 # ------------------------------------------------------------------ 입력
 
@@ -210,6 +220,8 @@ func _chain_actions() -> Array[StringName]:
 func _step_state() -> void:
 	if action_lock_ticks > 0:
 		action_lock_ticks -= 1
+	if guard_fx_ticks > 0:
+		guard_fx_ticks -= 1
 	match state:
 		&"ground":
 			_step_ground()
@@ -219,6 +231,8 @@ func _step_state() -> void:
 			_step_dodge()
 		&"light", &"skill":
 			_step_attack()
+		&"guard":
+			_step_guard()
 		&"air_attack":
 			_step_air_attack()
 		&"hitstun":
@@ -227,7 +241,7 @@ func _step_state() -> void:
 			pass
 
 func _on_state_entered(new_state: StringName) -> void:
-	if new_state != &"light" and new_state != &"skill" and new_state != &"air_attack":
+	if new_state != &"light" and new_state != &"skill" and new_state != &"air_attack" and new_state != &"guard":
 		end_hitboxes()
 		current_hitbox = null
 		current_attack = null
@@ -320,8 +334,98 @@ func _start_skill(sd: SkillData) -> void:
 	current_attack = sd.attack
 	cooldowns[sd.id] = sd.cooldown_ticks()
 	skill_uses[sd.id] = int(skill_uses.get(sd.id, 0)) + 1
+	if sd.attack.guard:
+		_start_guard(sd)
+		return
 	change_state(&"skill")
 	last_event = sd.display_name
+	_begin_attack_tick()
+
+# ------------------------------------------------------------------ 흘려받기(E)
+
+## 입력을 소비한 틱이 t=0. t0~(startup-1) 정면 방어 창, 그 뒤 실패 회복. 성공/실패 모두 시작 시 재사용이 걸린다.
+func _start_guard(sd: SkillData) -> void:
+	guard_facing = facing
+	attack_facing = facing
+	guard_consumed = false
+	pending_counter = false
+	velocity = Vector2.ZERO
+	action_id += 1
+	change_state(&"guard")
+	state_ticks = 1
+	last_event = sd.display_name
+
+func guard_window_open() -> bool:
+	return state == &"guard" and not guard_consumed and current_attack != null and attack_t() < current_attack.startup_ticks()
+
+## Battle 의 판정 계층이 receive_hit 전에 호출한다. 정면의 반격 가능 근접 공격/화살 1회만 막는다.
+## 근접: 출처 발 x 가 방어 방향 앞쪽(같으면 원 공격 방향이 나를 향하는지). 화살: 진행 방향 × 방어 방향 < 0.
+func try_parry(info: HitInfo) -> bool:
+	if not guard_window_open() or not alive:
+		return false
+	if info.attack == null or not info.attack.parryable:
+		return false
+	var front := false
+	if info.from_projectile:
+		front = info.attacker_facing * guard_facing < 0
+	else:
+		var dx := info.source_pos.x - floor_pos.x
+		if absf(dx) > 0.001:
+			front = signf(dx) == float(guard_facing)
+		else:
+			front = info.attacker_facing == -guard_facing
+	if not front:
+		return false
+	guard_consumed = true      # 확인 즉시 소비: 같은 틱의 다른 공격은 막지 않는다
+	pending_counter = true     # 반격은 이번 피해 순회 밖, 다음 전투 틱 t=0
+	parries += 1
+	last_guard_result = "흘려받기 성공"
+	guard_fx_ticks = 40
+	last_event = "흘려받기 성공"
+	return true
+
+func _step_guard() -> void:
+	var atk := current_attack
+	if pending_counter:
+		pending_counter = false
+		_start_counter()
+		return
+	var t := attack_t()
+	var total := atk.total_ticks()
+	if t >= total:
+		change_state(&"ground")
+		velocity = Vector2.ZERO
+		_step_ground()
+		return
+	approach_velocity(Vector2.ZERO)
+	move_by_velocity()
+	if t == atk.startup_ticks() and not guard_consumed:
+		last_guard_result = "흘려받기 실패"
+		guard_fx_ticks = 30
+	if t >= atk.startup_ticks():
+		# 실패 회복: 회피/이동 취소 창(남은 행동 제한 보존). 방어 창 중 자발적 취소 없음.
+		var mc := atk.move_cancel_ticks()
+		var dc := atk.dodge_cancel_ticks()
+		if dc > 0 and t >= total - dc:
+			if _try_buffer([ACTION_DODGE]):
+				return
+		if mc > 0 and t >= total - mc and move_input.length() > 0.05:
+			_keep_lock_from_cancel()
+			change_state(&"ground")
+			_step_ground()
+			return
+
+## 성공 반격: 방어 방향으로 고정한 짧은 베기 1회. 재사용을 다시 걸지 않는다.
+func _start_counter() -> void:
+	var counter: AttackData = current_attack.counter_attack if current_attack != null else null
+	if counter == null:
+		change_state(&"ground")
+		return
+	facing = guard_facing
+	current_attack = counter
+	counters_started += 1
+	change_state(&"skill")
+	last_event = "흘려받기 반격"
 	_begin_attack_tick()
 
 func _start_air_attack() -> void:
@@ -422,7 +526,10 @@ func _step_attack() -> void:
 		return
 	_advance_attack_hitbox()
 	var in_active := t >= s and t < s + a
-	if atk.dash_distance > 0.0 and in_active:
+	if atk.multi_hits > 0:
+		# 일섬연무: 준비부터 종료까지 이동 없음·방향 고정
+		velocity = Vector2.ZERO
+	elif atk.dash_distance > 0.0 and in_active:
 		# 스킬 돌진: 기존 일정 속도 전진
 		velocity = Vector2(attack_facing * atk.dash_distance / (float(a) * Ticks.DT), 0.0)
 		move_by_velocity()
@@ -482,6 +589,7 @@ func _step_hitstun() -> void:
 
 func _on_hit(info: HitInfo) -> void:
 	clear_buffer()
+	pending_counter = false     # 같은 틱 뒤쪽 타격/다른 공격으로 실제 경직: 반격 예약 폐기
 	hitstun_ticks = Ticks.from_ms(tuning.player_hitstun_ms)
 	knockback_remaining = info.effective_knockback()
 	knockback_dir = info.direction
@@ -494,14 +602,12 @@ func _on_hit(info: HitInfo) -> void:
 func _die() -> void:
 	clear_buffer()
 	action_lock_ticks = 0
+	pending_counter = false
 	super()
 
 func cooldown_for(sd: SkillData) -> int:
 	return cooldowns.get(sd.id, 0)
 
-## 흘려받기 판정(Battle 의 바깥 판정 계층이 receive_hit 전에 호출). HWR-004 4단계에서 구현한다.
-func try_parry(_info: HitInfo) -> bool:
-	return false
 
 # ------------------------------------------------------------------ 그리기
 ## 몸 기울기와 검 궤적은 그림에만 적용한다. 발 위치, 그림자, y 정렬, 피격 범위, 높이는 바꾸지 않는다.
@@ -540,10 +646,22 @@ func _draw_body() -> void:
 	_draw_sword()
 
 func _draw_sword() -> void:
+	if state == &"guard" and current_attack != null:
+		# 흘려받기: 검을 정면에 세운다. 창이 열려 있으면 밝고, 실패 회복이면 흐리게
+		var f := float(guard_facing)
+		var pivot := Vector2(0.0, -height - body_height + 22.0)
+		var open := guard_window_open()
+		var col := Color(0.6, 0.9, 1.0, 0.95) if open else Color(0.7, 0.7, 0.75, 0.6)
+		draw_line(pivot + Vector2(f * 18.0, 18.0), pivot + Vector2(f * 26.0, -34.0), col, 4.0)
+		if open:
+			draw_arc(pivot + Vector2(f * 22.0, -8.0), 30.0, deg_to_rad(-60.0 if f > 0 else 120.0), deg_to_rad(60.0 if f > 0 else 240.0), 10, Color(0.5, 0.85, 1.0, 0.5), 2.0)
+		return
 	if current_attack == null or (state != &"light" and state != &"skill" and state != &"air_attack"):
 		return
 	var style: int = current_attack.swing_style
 	var phase := attack_phase()
+	if style == AttackData.Swing.WAVE and current_attack.fires_projectile:
+		style = AttackData.Swing.HORIZONTAL
 	if style == AttackData.Swing.LEGACY:
 		# M1 표시: 타격 구간 동안 앞쪽 사각형
 		if current_hitbox != null and phase == &"active":

@@ -452,8 +452,7 @@ func _enter_room(room_id: StringName, from_dir: StringName, explicit_start: Vect
 	player.floor_pos = start
 	player.velocity = Vector2.ZERO
 	player.knockback_remaining = 0.0
-	player.clear_buffer()
-	player.end_hitboxes()
+	player.reset_transients()   # 보관 입력·판정·방어 창·반격 예약·다단히트 이벤트·남은 행동 제한
 	if player.alive and player.state != &"ground":
 		player.change_state(&"ground")
 	if from_dir == &"west":
@@ -706,7 +705,7 @@ func _resolve(p_outcome: StringName) -> void:
 		if is_instance_valid(sp.marker):
 			sp.marker.queue_free()
 	pending_spawns.clear()
-	player.clear_buffer()
+	player.reset_transients()
 	log_event("승리" if p_outcome == &"victory" else ("패배" if p_outcome == &"defeat" else "출정 포기"))
 	resolved.emit(p_outcome, run_id)
 

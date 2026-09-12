@@ -1,0 +1,31 @@
+[gd_resource type="Resource" script_class="AttackData" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/attack_data.gd" id="1"]
+[ext_resource type="Resource" path="res://data/attacks/yusubangyeok_counter.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = &"yusubangyeok"
+display_name = "흘려받기"
+startup_ms = 200
+active_ms = 0
+recovery_ms = 300
+chain_window_ms = 0
+move_cancel_ms = 100
+dodge_after_active = false
+damage_mult = 0
+strong = false
+hitstun_ms = 0
+knockback = 0
+launch = false
+launch_velocity = 0
+lock_after_cancel = true
+guard = true
+counter_attack = ExtResource("2")
+reach_forward = 0
+reach_back = 0
+depth_tolerance = 0
+z_min = 0
+z_max = 0
+dash_distance = 0
+swing_style = 8

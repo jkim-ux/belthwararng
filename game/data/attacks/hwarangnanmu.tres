@@ -1,0 +1,33 @@
+[gd_resource type="Resource" script_class="AttackData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/attack_data.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = &"hwarangnanmu"
+display_name = "일섬연무"
+startup_ms = 150
+active_ms = 450
+recovery_ms = 400
+chain_window_ms = 0
+move_cancel_ms = 0
+dodge_after_active = false
+damage_mult = 1.0
+strong = false
+hitstun_ms = 200
+knockback = 40
+knockback_ms = 120
+launch = false
+launch_velocity = 0
+ignores_boss_flinch = true
+multi_hits = 5
+multi_hit_interval_ms = 100
+multi_hit_active_ticks = 2
+knockback_last_hit_only = true
+reach_forward = 150
+reach_back = 10
+depth_tolerance = 32
+z_min = -10
+z_max = 110
+dash_distance = 0
+swing_style = 9
