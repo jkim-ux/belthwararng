@@ -570,7 +570,7 @@ func spawn_all(vs: VillageState) -> void:
 	for id in vs.sorted_villager_ids():
 		var c: Vector2i = template.spawn
 		if i < cells.size():
-			c = cells[mini(i * 2 + 1, cells.size() - 1)]
+			c = cells[mini(i * 5 + 2, cells.size() - 1)]
 		spawn_actor(id, c)
 		i += 1
 
@@ -780,7 +780,8 @@ static func growth_stage(b: Dictionary, def: BuildingDef) -> int:
 		return 0
 	return clampi(int(floor(float(b.progress) / (def.cycle_seconds / 3.0))), 0, 2)
 
-## 플레이어 인접 상호작용 대상 찾기(8방향 거리 기준, 같은 거리면 공사 현장/농장 우선): {kind, id} 또는 {}
+## 플레이어 인접 상호작용 대상 찾기: 8방향 안에서 가장 가까운 것(상하좌우가 대각선보다 우선), 같은 거리면 공사 현장/농장 우선.
+## {kind, id} 또는 {}
 func interact_target(vs: VillageState) -> Dictionary:
 	if player_cell.x < 0:
 		return {}
@@ -791,15 +792,16 @@ func interact_target(vs: VillageState) -> Dictionary:
 		if b.state != "construction" and def_of(b).kind != &"farm":
 			continue
 		for c in cells_of(b):
-			var d := maxi(absi(c.x - player_cell.x), absi(c.y - player_cell.y))
-			if d <= 1 and d < best_d:
-				best_d = d
+			var dx := absi(c.x - player_cell.x)
+			var dy := absi(c.y - player_cell.y)
+			if maxi(dx, dy) <= 1 and dx + dy < best_d:
+				best_d = dx + dy
 				best = {"kind": "building", "id": id}
 	for dy in range(-1, 2):
 		for dx in range(-1, 2):
 			var c := player_cell + Vector2i(dx, dy)
 			if template.in_bounds(c) and has_obstacle(vs, c):
-				var d := maxi(absi(dx), absi(dy))
+				var d := absi(dx) + absi(dy)
 				if d < best_d:
 					best_d = d
 					best = {"kind": "obstacle", "id": VillageTemplate.obstacle_id(c), "cell": c}

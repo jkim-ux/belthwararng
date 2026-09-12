@@ -46,6 +46,7 @@ var hover_cell: Vector2i = Vector2i(-1, -1)
 var preview: Dictionary = {}                      ## 마지막 can_place 결과
 var selected_building: int = 0
 var show_water: bool = false
+var overview: bool = false                        ## 전체 마을 보기(축소)
 var build_list_open: bool = true
 var message: String = ""
 var message_time: float = 0.0
@@ -184,6 +185,12 @@ func _pos_walkable(p: Vector2) -> bool:
 
 func _update_camera(snap: bool) -> void:
 	var view_h := VIEW_H - TOP_BAR - BOTTOM_BAR
+	if overview:
+		var sc := minf(float(VIEW_W) / MAP_W, float(view_h) / MAP_H)
+		world.scale = Vector2(sc, sc)
+		world.position = Vector2((VIEW_W - MAP_W * sc) / 2.0, TOP_BAR + (view_h - MAP_H * sc) / 2.0)
+		return
+	world.scale = Vector2.ONE
 	var target := player_pos - Vector2(VIEW_W / 2.0, TOP_BAR + view_h / 2.0)
 	target.x = clampf(target.x, 0.0, maxf(0.0, MAP_W - VIEW_W))
 	target.y = clampf(target.y, -TOP_BAR, maxf(-TOP_BAR, MAP_H - VIEW_H + BOTTOM_BAR))
@@ -215,6 +222,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_V:
 				show_water = not show_water
 				map_layer.queue_redraw()
+				_hud_dirty = true
+			KEY_M:
+				overview = not overview
+				_update_camera(true)
 				_hud_dirty = true
 			KEY_ESCAPE:
 				if mode != "free":
@@ -803,6 +814,15 @@ func _draw_actors() -> void:
 			else:
 				var b := v.building(int(tgt.id))
 				hint = "E 누르기: 공사 작업 (초당 5)" if b.state == "construction" else "E 누르기: 직접 농사 (초당 1)"
+		if not tgt.is_empty():
+			# E 가 작용할 대상 강조(장애물 칸 또는 건물 점유)
+			if tgt.kind == "obstacle":
+				actor_layer.draw_rect(_cell_rect(tgt.cell).grow(-3), Color(1.0, 0.95, 0.4), false, 3.0)
+			else:
+				var tb := v.building(int(tgt.id))
+				var tdef := s.def_of(tb)
+				var tfp := tdef.footprint(int(tb.rot))
+				actor_layer.draw_rect(Rect2(tb.x * CELL, tb.y * CELL, tfp.x * CELL, tfp.y * CELL).grow(-3), Color(1.0, 0.95, 0.4), false, 3.0)
 		if hint != "":
 			var w := hint.length() * 9.0 + 16
 			actor_layer.draw_rect(Rect2(player_pos + Vector2(-w / 2.0, 8), Vector2(w, 20)), Color(0, 0, 0, 0.6))
@@ -894,14 +914,16 @@ func _build_hud() -> void:
 	var th := HBoxContainer.new()
 	th.add_theme_constant_override("separation", 14)
 	top_bar.add_child(th)
-	top_label = _lbl("", 16, Color(1.0, 0.92, 0.6))
+	top_label = _lbl("", 15, Color(1.0, 0.92, 0.6))
 	top_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	th.add_child(top_label)
 	msg_label = _lbl("", 14, Color(0.8, 0.95, 0.8))
 	msg_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	msg_label.clip_text = true
 	msg_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	th.add_child(msg_label)
 	th.add_child(_btn("관개 보기 (V)", func(): show_water = not show_water; map_layer.queue_redraw(); _hud_dirty = true))
+	th.add_child(_btn("전체 보기 (M)", func(): overview = not overview; _update_camera(true); _hud_dirty = true))
 	th.add_child(_btn("도움말", func(): _help_open = not _help_open; _hud_dirty = true))
 	th.add_child(_btn("지도로", request_leave))
 	bottom_bar = PanelContainer.new()
@@ -937,7 +959,7 @@ func _build_hud() -> void:
 	hv.add_child(_lbl("방향키/WASD 이동 · E 인접한 덤불/나무/바위 정리(누르는 동안 진행, 놓아도 진행량 유지) · E 공사 현장에서 작업(초당 5) · E 농장에서 직접 농사", 14))
 	hv.add_child(_lbl("B 건설 목록 열기/닫기 · 목록에서 건물 선택 → 마우스로 반투명 미리보기 → 좌클릭 확정 · R 회전 · 우클릭/Esc 취소", 14))
 	hv.add_child(_lbl("수로: 드래그해서 여러 칸을 한 번에(전부 설치 또는 전부 취소) · 길: 연속 설치", 14))
-	hv.add_child(_lbl("건물 클릭 → 오른쪽 패널에서 주민 배정 / 이동 / 공사 취소(자원 100% 반환) / 철거(원재료 반환) · V 관개 보기", 14))
+	hv.add_child(_lbl("건물 클릭 → 오른쪽 패널에서 주민 배정 / 이동 / 공사 취소(자원 100% 반환) / 철거(원재료 반환) · V 관개 보기 · M 전체 보기", 14))
 	hv.add_child(_lbl("농장은 3×3 비옥한 개간지. 우물(용량 2)·보(용량 4)의 물이 수로를 타고 상하좌우로 닿아야 자란다. 30초 농사에 식량 6.", 14))
 	hv.add_child(_lbl("벌목소/채석장은 20초 주기. 주기 시작에 식량 1이 있으면 먹고 정상 생산, 없으면 절반. 주택 완공 시 주민 2명 귀환(최대 2채).", 14))
 	hv.add_child(_lbl("경로 복구 현장(군자금 40)을 완공하면 관리도 60. 훈련장/보급창은 관리도 60에서 건설·완공해야 효과가 난다.", 14))

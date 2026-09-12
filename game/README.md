@@ -1,9 +1,10 @@
 # 사무라이 점령전 (Godot 프로젝트)
 
-HWR-001 의 M0·M1 전투 실험 위에 HWR-002 R1(마을·동료·저장)과 HWR-003(방 던전·원거리 적)을 얹은 프로젝트다.
+HWR-001 의 M0·M1 전투 실험 위에 HWR-002 R1(마을·동료·저장), HWR-003(방 던전·원거리 적), HWR-005(직접 가꾸는 마을)를 얹은 프로젝트다.
 임시 도형으로 표현한 사무라이 1명이 평평한 전투 공간에서 이동·점프·회피·평타 3연격·돌진베기·올려베기를 쓰고,
 첫 챕터 3거점(농촌 → 창고 마을 → 고개 초소)을 각각 **입구 → 일반 전투방 3개(2웨이브) → 보스방**의 던전으로 공략한다.
 선택 보물방 1개, 근접병·궁수·화염 투척병, 우측 상단 방 미니맵이 있으며 보스를 처치해야 거점이 해방된다.
+해방한 농촌/창고는 32×24 격자 마을로 직접 걸어 들어가 개간·건물 배치·공사·관개·주민 배정으로 가꾼다(HWR-005).
 
 ## 엔진 버전
 
@@ -37,7 +38,32 @@ godot --headless --path . --import
 ## 화면 흐름 (캠페인)
 
 시작 화면 **새 게임 / 이어하기 / 수련장** → **지도**(5챕터, 거점 상태, 진입 조건) → 거점 **출정** → **던전(방 이동)** → 보스 처치 → **결과 창** →
-(마을이면) **관리** 화면에서 정비·시설 → 다음 거점. 초소 보스 최초 격파 → 챕터 1 클리어 → **합류 장면** → **동료 선택** → 지도.
+(마을이면) **마을 들어가기** → 마을 장면에서 개간·건설·경로 복구 현장 완공(관리도 60) → 다음 거점. 초소 보스 최초 격파 → 챕터 1 클리어 → **합류 장면** → **동료 선택** → 지도.
+
+### 마을 (HWR-005)
+
+- 지도의 **마을 들어가기**로 해방된 농촌/창고에 들어간다. 출입구(남쪽 '출구' 칸)에서 **E** 또는 상단 **지도로** 버튼으로 나온다. 초소는 군사 거점이라 마을이 없다.
+- 자원: 군자금(전투 보상)·**목재**(나무 개간, 벌목소)·**석재**(바위 개간, 채석장)·**식량**(농장 수확)은 해방 마을이 공유한다. 주민·건물·개간은 마을별이다.
+  첫 농촌 진입 때 한 번 목재 60/석재 40/식량 20 을 받는다(재입장·로드·재승리로 다시 주지 않음).
+- 개간: 덤불 1초(보상 없음)·작은 나무 2초(목재 4)·바위 3초(석재 3). 인접해서 **E** 를 누르는 동안 진행하며 놓아도 진행량은 남는다. 제거한 나무/바위는 되살아나지 않는다.
+- 건설: 하단 목록(**B**)에서 고르면 반투명 미리보기가 마우스를 따라온다. **좌클릭** 확정(이때 비용 차감), **R** 회전, **우클릭/Esc** 취소. 불가 이유(강 위·덤불 제거 필요·통로 막힘·목재 8 부족 …)를 ✓/× 와 함께 보여준다.
+  확정하면 자재 더미·기초가 놓이고 **공사**가 시작된다(플레이어 E 초당 5, 배정 주민 초당 1, 합산 가능). 공사 취소는 100% 반환, 완공 건물 이동은 무료(ID·진행·주민 유지), 철거는 원재료 반환.
+- 수로는 **드래그**로 여러 칸을 미리 보고 한 번에 확정한다(전부 설치 또는 전부 취소). 길은 무료·즉시 완공.
+
+| 건물 | 크기 | 비용(군자금/목재/석재) | 공사량 | 기능 |
+| --- | --- | --- | --- | --- |
+| 농장 | 3×3 | 0/10/2 | 30 | 비옥한 개간지. 물 + 농부 1명(또는 플레이어 E)으로 30초에 식량 6 |
+| 우물 | 2×2 | 0/8/6 | 30 | 연결 농장 2개 공급 |
+| 수로 | 1×1 | 0/1/0 | 5 | 상하좌우 연결. 대각선 없음 |
+| 작은 보 | 3×2 | 30/20/20 | 60 | 마을당 강가 자리 1곳. 육지 출구에서 농장 4개 공급 |
+| 벌목소 / 채석장 | 2×2 | 0/12/2 · 0/8/8 | 30 | 숲/암반 작업 구역에 접해야 함. 주민 1명, 20초에 목재 6 / 석재 4. 주기 시작에 식량 1 소비, 없으면 절반(3/2) |
+| 주택 | 2×2 | 0/10/4 | 30 | 완공 시 주민 2명 귀환(1회). 마을당 2채, 초기 3 → 최대 7 |
+| 경로 복구 현장 | 고정 2×2 | 40/10/5 | 30 | 완공 시 관리도 40 → 60, 다음 거점 개방 |
+| 훈련장 / 보급창 | 3×2 | 60/12/6 | 30 | 관리도 60 필요. 완공 시 공격력 +5% / 최대 체력 +10 (1회) |
+
+- 물: 완공된 우물(점유 칸)·보(출구 칸)와 수로가 상하좌우로 이어진 연결망의 용량을 합산하고, 농장 생성 ID 순서로 1씩 배정한다. 부족한 농장은 '용수 부족'. **V** 관개 보기로 망·공급 수를 겹쳐 본다. 수로를 끊으면 먼 농장도 멈추고 진행량은 보존된다.
+- 주민: 건물 클릭 → 오른쪽 패널에서 배정. 한 주민은 한 작업만 하며 실제로 걸어가 도착한 뒤에 일한다. 공사 완료 후에는 빈손으로 돌아온다.
+- 경제 시간은 **지금 들어가 있는 마을에서만** 10Hz 고정 틱으로 흐른다. 지도·전투·다른 마을·앱을 닫은 동안에는 생산과 공사가 멈춘다(오프라인 생산 없음). 완료 이벤트는 즉시, 중간 진행은 10초마다 저장한다.
 
 ### 거점 던전 (HWR-003)
 
@@ -93,6 +119,19 @@ godot --headless --path . --import
 | Esc | 일시정지 (캠페인에서는 출정 포기 선택 가능) |
 | 메뉴 | 마우스 클릭, 또는 방향키로 초점 이동 + Enter |
 
+마을 장면(전투와 입력 컨텍스트가 분리되어 스킬 액션을 읽지 않는다):
+
+| 키 | 동작 |
+| --- | --- |
+| 방향키 / WASD | 마을 캐릭터 이동 |
+| E | 인접 덤불·나무·바위 정리 / 공사 현장 작업 / 농장 직접 농사 (누르는 동안). 짧게 누르면 인접 건물 선택. 출입구에서는 지도로 |
+| B | 하단 건설 목록 열기/닫기 |
+| 마우스 이동 · 좌클릭 | 미리보기 이동 · 유효 위치 확정. 수로는 드래그 |
+| R | 회전 가능한 건물 90도 회전 |
+| 우클릭 / Esc | 배치 취소, 선택 해제 |
+| V | 관개 보기 |
+| M | 전체 마을 보기(축소) |
+
 내부 ID 와 경로(`bieonchan`, `seungwolcham`, `hwarang_skills.tres` 등)는 HWR-001 과의 호환을 위해 유지하고 표시명만 바꿨다.
 
 ### 수련장 개발용 키
@@ -128,6 +167,7 @@ godot --headless --path . --import
 ```bash
 godot --headless --path . -s tests/run_tests.gd            # 전투 규칙 (M1 회귀 + R1 모멘텀) 24개
 godot --headless --path . -s tests/run_campaign_tests.gd   # 캠페인·저장·방 던전·원거리 적·화염·상자·보스·동료·화면 26개 (약 1~2분)
+godot --headless --path . -s tests/run_village_tests.gd    # 마을(HWR-005) 정의·개간·배치·공사·물망·농사·생산·주민·진행·경제·schema1 이전·저장 실패·화면 15개 (약 1분)
 ```
 
 캠페인 테스트는 `user://test_saves/` 아래 파일만 쓰고 지운다. 사용자 저장 `user://campaign_save.json` 은 건드리지 않는다.
@@ -142,14 +182,22 @@ godot --path . -- --demo --screenshot=/tmp/battle.png
 
 수련장에서 스크립트 입력(이동 → 평타 3연격)을 재생한 뒤 스크린샷을 저장하고 종료한다.
 
+```bash
+xvfb-run -a -s "-screen 0 1280x720x24" godot --path . -s tests/shoot_village.gd   # 마을 화면 순차 캡처 → reports/HWR-005_*.png
+```
+
 ## 저장
 
 - 위치: `user://campaign_save.json` (Linux: `~/.local/share/godot/app_userdata/사무라이 점령전 (HWR-002)/`). 백업 `.bak`, 임시 `.tmp`.
-  HWR-003 에서도 프로젝트 이름(`config/name`)을 바꾸지 않아 기존 저장 폴더가 그대로 쓰인다. 저장 형식(schema_version 1)은 변경 없음.
+  HWR-005 에서도 프로젝트 이름(`config/name`)을 바꾸지 않아 기존 저장 폴더가 그대로 쓰인다.
 - 흐름: 후보 상태 → 임시 파일 기록 → 다시 읽어 확인 → 이전 정상 저장을 `.bak` 으로 보존 → 교체 → 메모리 반영.
 - 실패 시 기존 상태를 유지하고 결과 창에 **저장 재시도 / 이전 저장으로 돌아가기**를 제공한다. 재시도는 같은 후보에 대해 수행하며 보상을 다시 더하지 않는다.
 - 손상된 주 저장은 `.bak` 으로 복구를 시도하고, 그것도 없으면 새 게임/취소를 제공한다. 상위 `schema_version` 은 읽지 않는다.
-- schema_version 1 필드: `currency`, `sites{id: liberated, management, repaired}`, `facilities{id: true}`, `cleared_chapters[]`, `unlocked_companions[]`, `selected_companion_id`, `last_committed_run_id`. 공격력·최대 체력·진입 가능 여부는 저장하지 않고 계산한다.
+- **schema_version 2** (HWR-005) 필드: schema 1 의 `currency`, `sites{id: liberated, management, repaired}`, `facilities{id: true}`, `cleared_chapters[]`, `unlocked_companions[]`, `selected_companion_id`, `last_committed_run_id` 에
+  `wood`, `stone`, `food`, `supplies_granted[]`(일회성 물자를 준 마을), `villages{site_id: {initialized, next_id, cleared[], clearing{}, buildings{id: {def_id, x, y, rot, state, work_done, progress, fed, house_returned}}, villagers{id: {name, job_kind, job_building}}}}` 를 더했다.
+  공격력·최대 체력·진입 가능·물 연결·통행 격자·주민 위치/경로는 저장하지 않고 계산한다.
+- schema 1 저장은 이어하기 때 2 로 이전한다: 해방 마을에 템플릿·주민 3명, 정비 완료 → 고정 복구 현장 완공, 구매 시설 → 예약 자리에 완공 배치(비용 없음, 효과 플래그 유지), 첫 농촌 물자 1회. 원본은 `campaign_save.json.v1.bak` 으로 보존하고 새 형식을 원자 저장한다. 새 형식 저장이 실패하면 원본이 그대로 남고 재시도할 수 있다.
+- 마을에서는 배치/취소/철거/이동/배정/완료 이벤트마다 같은 후보 → 검증 → 저장 경로를 쓰고, 중간 진행은 10초마다 저장한다. 저장 실패 시 마을 시간과 추가 변경을 멈추고 재시도/이전 저장을 제공한다.
 
 ## 수치 조정
 
@@ -179,12 +227,14 @@ godot --path . -- --demo --screenshot=/tmp/battle.png
 
 | 경로 | 역할 |
 | --- | --- |
-| `scenes/main.tscn` + `scripts/ui/screens/game.gd` | 시작·지도·관리·결과·합류·동료 선택 화면, 전투 장면 생성 |
+| `scenes/main.tscn` + `scripts/ui/screens/game.gd` | 시작·지도·결과·합류·동료 선택 화면, 전투 장면·마을 장면 생성 |
+| `scripts/village/` | `village_state`(마을별 영구 상태), `village_sim`(격자·배치 검증·물 연결망·주민 이동/작업·공사/생산 틱), `village_view`(마을 장면: 이동·카메라·미리보기·HUD) |
+| `data/village/` | 마을 템플릿 2종(`*_template.tres`, 32×24 지형·장애물), `buildings/*.tres` 건물 정의 11종 |
 | `scenes/battle.tscn` + `scripts/battle.gd` | 전투 컨트롤러: 틱 순서, 적중·투사체(이동 구간)·바닥 불 판정, 방 진입/문 이동/전이, 웨이브·방 정리·보스 승리, 근접/원거리 허가, 화염 상한, 상자, 프로필 전환 |
 | `scripts/core/` | `battle_actor`(바닥 x·y / 높이 z, 지속 피해 `receive_burn`), `hit_box`, `projectile`, `motion_curve`, `ticks`, `arena` |
 | `scripts/actors/` | `player`, `enemy_base`(감속 밀림), `melee_enemy`(대상 선택·허가), `archer_enemy`(사격선·후퇴), `thrower_enemy`(착탄점 고정·항아리), `captain_enemy`(거점 보스), `archer_companion`(궁수 동료·화염 회피), `dummy` |
 | `scripts/rooms/` | `room_decor`(문·안내), `treasure_chest`, `fire_zone`(바닥 불), `fire_pot`(항아리·착탄 예고) |
 | `scripts/campaign/` | `campaign_state`(영구 상태·규칙), `save_store`(임시 파일·백업), `campaign_controller`(run_id·후보·상자 보류 합산·재시도) |
-| `scripts/data/` | 정의 리소스 스크립트 (AttackData, CombatProfile, SiteDef, DungeonDef, RoomDef, EncounterWave, ChapterDef, CompanionDef, FacilityDef, CampaignData) |
+| `scripts/data/` | 정의 리소스 스크립트 (AttackData, CombatProfile, SiteDef, DungeonDef, RoomDef, EncounterWave, ChapterDef, CompanionDef, FacilityDef, BuildingDef, VillageTemplate, CampaignData) |
 | `scripts/ui/` | HUD(미니맵 포함), 개발 표시, 피해 숫자, 적중 섬광, 출현 예고 |
-| `tests/` | 헤드리스 검증 2종 |
+| `tests/` | 헤드리스 검증 3종 + 마을 화면 캡처 스크립트 |
