@@ -83,6 +83,8 @@ var interact_prev: bool = false
 var room_message: String = ""
 var room_message_ticks: int = 0
 var brute_hint_shown: bool = false           ## 첫 강인병 안내(출정당 1회)
+var run_brute_attacks: int = 0               ## 이번 출정에서 강인병이 실제로 준비를 시작한 패턴 수(방 정리 시 합산)
+var run_brute_staggers: int = 0              ## Q 로 무너뜨린 횟수
 
 # 개발용 자동 시연/스크린샷
 var _screenshot_path: String = ""
@@ -403,6 +405,8 @@ func start_encounter(site: SiteDef, p_run_id: String, comp: CompanionDef, attack
 	chest_heal_total = 0
 	pending_currency = 0
 	brute_hint_shown = false
+	run_brute_attacks = 0
+	run_brute_staggers = 0
 	player.reset_to(site.player_start)
 	player.attack_power = attack_power
 	player.max_hp = max_hp
@@ -482,10 +486,19 @@ func _enter_room(room_id: StringName, from_dir: StringName, explicit_start: Vect
 
 ## 방을 떠날 때 정리: 적·투사체·항아리·불·예고·허가·피해 시계. 다음 방으로 넘어가지 않는다.
 func _clear_room_transients() -> void:
+	_accumulate_brute_stats()
 	for e in enemies:
 		if is_instance_valid(e):
 			e.queue_free()
 	enemies.clear()
+
+func _accumulate_brute_stats() -> void:
+	for e in enemies:
+		if e is BruteEnemy and is_instance_valid(e):
+			run_brute_attacks += e.attacks_started
+			run_brute_staggers += e.staggers
+			e.attacks_started = 0
+			e.staggers = 0
 	for pr in projectiles:
 		if is_instance_valid(pr):
 			pr.finish()
@@ -686,6 +699,7 @@ func _resolve(p_outcome: StringName) -> void:
 		return
 	result_state = &"resolved"
 	outcome = p_outcome
+	_accumulate_brute_stats()
 	for a in all_actors():
 		a.end_hitboxes()
 	for pr in projectiles:

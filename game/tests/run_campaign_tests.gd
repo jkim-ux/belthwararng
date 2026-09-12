@@ -15,7 +15,7 @@ var data: CampaignData
 var fight_reports: Array[String] = []     ## 실전 자동 플레이 측정(보고용)
 
 func _initialize() -> void:
-	print("=== HWR-002 R1 / HWR-003 캠페인 검증 시작 (Godot %s) ===" % Engine.get_version_info().string)
+	print("=== HWR-002 R1 / HWR-003 / HWR-004 R1 캠페인 검증 시작 (Godot %s) ===" % Engine.get_version_info().string)
 	data = load(CampaignController.DATA_PATH)
 	await process_frame
 	var tests := [
@@ -46,8 +46,16 @@ func _initialize() -> void:
 		"test_game_screens_smoke",
 		# --- HWR-004 R1
 		"test_h4_1_enemy_damage_doubled_on_every_path",
+		"test_h4_2_brute_placement_table",
+		"test_h4_8_transition_and_resolve_clear_skill_events",
 	]
+	var only := ""
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--only="):
+			only = a.trim_prefix("--only=")
 	for t in tests:
+		if only != "" and not t.contains(only):
+			continue
 		await _run(t)
 	_cleanup_saves()
 	print("=== 결과: 통과 %d, 실패 %d ===" % [_pass, _fail])
@@ -1759,6 +1767,8 @@ func test_scenario_12_dev_keys_ignored_in_campaign() -> void:
 
 ## 단순 자동 조작: 방이 잠기면 대상에게 붙어 평타, 불 위면 빠져나옴, 방이 열리면 다음 문으로 이동(보물방 생략).
 ## strategy: "nearest" (가까운 적) / "ranged_first" (궁수·투척병 우선)
+## 자동 조작. strategy: "nearest"(평타만, HWR-003 기준) / "basic"(평타 + A/S) / "skills"(상황별 D/F/Q/W/E/R 포함).
+## 손맛 평가가 아니라 같은 조건의 비교 측정용이다.
 func auto_play(b: Battle, strategy: String, max_ticks: int = 60 * 300) -> Dictionary:
 	var p := b.player
 	var ticks := 0
@@ -1783,13 +1793,32 @@ func auto_play(b: Battle, strategy: String, max_ticks: int = 60 * 300) -> Dictio
 			elif target != null:
 				var dx := target.floor_pos.x - p.floor_pos.x
 				var dy := target.floor_pos.y - p.floor_pos.y
+				var facing_ok := (dx > 0.0) == (p.facing > 0)
 				if absf(dy) > 8.0:
 					move.y = signf(dy)
 				if absf(dx) > 75.0:
 					move.x = signf(dx)
-				elif (dx > 0.0) != (p.facing > 0) and p.state == &"ground":
+				elif not facing_ok and p.state == &"ground":
 					move.x = signf(dx)
-				if absf(dx) <= 95.0 and absf(dy) <= 14.0:
+				var used := false
+				# 공통 회피: 예고가 끝나가는 적 공격 범위 안이면 깊이 방향으로 회피(모든 전략 동일). skills 는 그 전에 E 를 시도한다.
+				if strategy == "skills":
+					used = _auto_skill_choice(b, target, dx, dy, actions)
+				var th: EnemyBase = _auto_threat(b) if not used else null
+				if th != null and p.dodge_cooldown_ticks == 0 and (p.state == &"ground" or p.state == &"light"):
+					move = Vector2(0.0, 1.0 if p.floor_pos.y < b.arena_rect().get_center().y else -1.0)
+					if absf(th.floor_pos.y - p.floor_pos.y) > 1.0:
+						move.y = -signf(th.floor_pos.y - p.floor_pos.y)
+					actions.append("dodge")
+					used = true
+				elif strategy == "basic":
+					if _ready(p, "skill_s") and absf(dx) <= 90.0 and absf(dy) <= 14.0 and facing_ok and not target.is_stagger_immune():
+						actions.append("skill_s")
+						used = true
+					elif _ready(p, "skill_a") and absf(dx) >= 120.0 and absf(dx) <= 250.0 and absf(dy) <= 14.0 and facing_ok:
+						actions.append("skill_a")
+						used = true
+				if not used and absf(dx) <= 95.0 and absf(dy) <= 14.0:
 					actions.append("attack_light")
 				if move.x != 0.0:
 					var ahead := p.floor_pos + Vector2(move.x * 45.0, move.y * 10.0)
@@ -1820,29 +1849,121 @@ func auto_play(b: Battle, strategy: String, max_ticks: int = 60 * 300) -> Dictio
 		var st: Dictionary = b.run_stats[rid]
 		rooms[rid] = st.duplicate()
 		total_damage += int(st.damage_taken)
-	return {"ticks": ticks, "outcome": String(b.outcome), "hp": p.hp, "max_hp": p.max_hp, "damage": total_damage, "kills": b.kills, "rooms": rooms}
+	var uses := {}
+	for k in p.skill_uses.keys():
+		uses[String(k)] = int(p.skill_uses[k])
+	return {"ticks": ticks, "outcome": String(b.outcome), "hp": p.hp, "max_hp": p.max_hp, "damage": total_damage, "kills": b.kills, "rooms": rooms,
+		"brute_attacks": b.run_brute_attacks, "brute_staggers": b.run_brute_staggers, "parries": p.parries, "skill_uses": uses}
 
+## 대상: 가까운 적. skills 전략은 무너진 강인병을 우선하고, 내려찍기 예고 중인 강인병은 피한다.
 func _auto_target(b: Battle, strategy: String) -> EnemyBase:
 	var p := b.player
 	var best: EnemyBase = null
 	var best_d := INF
-	var ranged_exists := false
-	if strategy == "ranged_first":
-		for e in b.alive_enemies():
-			if e is ArcherEnemy or e is ThrowerEnemy:
-				ranged_exists = true
 	for e in b.alive_enemies():
-		if ranged_exists and not (e is ArcherEnemy or e is ThrowerEnemy):
-			continue
 		var d: float = absf(e.floor_pos.x - p.floor_pos.x) + absf(e.floor_pos.y - p.floor_pos.y)
+		if strategy == "skills" and e is BruteEnemy:
+			if e.state == &"stagger":
+				d -= 400.0
+			elif e.current_pattern == 1 and e.state == &"telegraph":
+				d += 300.0
 		if d < best_d:
 			best_d = d
 			best = e
 	return best
 
+## 곧 맞을 공격: 예고 막바지(6틱 이내)이거나 타격 중이고 내 발 위치가 그 범위 근처인 적
+func _auto_threat(b: Battle) -> EnemyBase:
+	var p := b.player
+	for e in b.alive_enemies():
+		var dx := absf(e.floor_pos.x - p.floor_pos.x)
+		var dy := absf(e.floor_pos.y - p.floor_pos.y)
+		var soon := false
+		var reach := 0.0
+		if e is MeleeEnemy and e.state == &"telegraph":
+			soon = e.state_ticks >= Ticks.from_ms(b.tuning.enemy_telegraph_ms) - 6
+			reach = b.tuning.enemy_attack_reach + 30.0
+		elif e is BruteEnemy and e.state == &"telegraph":
+			soon = e.state_ticks >= e._telegraph_ticks() - 8
+			reach = (b.tuning.brute_combo_reach + 40.0) if e.current_pattern == 0 else (b.tuning.brute_slam_radius_x + 30.0)
+		elif e is CaptainEnemy and e.state == &"telegraph":
+			soon = e.state_ticks >= e._telegraph_ticks() - 6
+			reach = (b.tuning.captain_slash_reach + 30.0) if e.current_pattern == 0 else 360.0
+		if soon and dx <= reach and dy <= 50.0:
+			return e
+	return null
+
+func _ready(p: Player, action: String) -> bool:
+	var sd: SkillData = p.skills_by_action[StringName(action)]
+	return p.cooldown_for(sd) == 0 and p.state == &"ground"
+
+## 상황별 스킬 선택(예시 조합: 강인병 Q→R, 정면 단발 E, 포위 F, 원거리 W, A 접근, S/D 일반 적). 하나만 고른다.
+func _auto_skill_choice(b: Battle, target: EnemyBase, dx: float, dy: float, actions: Array) -> bool:
+	var p := b.player
+	if p.state != &"ground":
+		return false
+	var facing_ok := (dx > 0.0) == (p.facing > 0)
+	# 정면에서 예고가 끝나가는 반격 가능 공격 → E
+	for e in b.alive_enemies():
+		var edx := e.floor_pos.x - p.floor_pos.x
+		if absf(edx) > 150.0 or absf(e.floor_pos.y - p.floor_pos.y) > 24.0 or (edx > 0.0) != (p.facing > 0):
+			continue
+		var incoming := false
+		if e is MeleeEnemy and e.state == &"telegraph" and e.state_ticks >= Ticks.from_ms(b.tuning.enemy_telegraph_ms) - 6:
+			incoming = true
+		elif e is BruteEnemy and e.current_pattern == 0 and e.state == &"telegraph" and e.state_ticks >= Ticks.from_ms(b.tuning.brute_combo_telegraph_ms) - 6:
+			incoming = true
+		elif e is CaptainEnemy and e.state == &"telegraph" and e.state_ticks >= e._telegraph_ticks() - 6:
+			incoming = true
+		if incoming and _ready(p, "skill_e"):
+			actions.append("skill_e")
+			return true
+	if target is BruteEnemy:
+		var br := target as BruteEnemy
+		if br.state == &"stagger" and absf(dx) <= 130.0 and absf(dy) <= 20.0 and facing_ok and _ready(p, "skill_r"):
+			actions.append("skill_r")
+			return true
+		if br.state != &"stagger" and absf(dx) <= 100.0 and absf(dy) <= 16.0 and facing_ok and _ready(p, "skill_q"):
+			actions.append("skill_q")
+			return true
+		if br.current_pattern == 1 and br.state == &"telegraph" and absf(dx) <= 120.0:
+			return false   # 내려찍기 예고: 스킬 대신 이동(호출자가 거리 유지)
+	# 포위: 양쪽 60~100px 에 적
+	var left := 0
+	var right := 0
+	for e in b.alive_enemies():
+		var edx := e.floor_pos.x - p.floor_pos.x
+		if absf(edx) <= 100.0 and absf(e.floor_pos.y - p.floor_pos.y) <= 30.0:
+			if edx < 0.0:
+				left += 1
+			else:
+				right += 1
+	if left > 0 and right > 0 and _ready(p, "skill_f"):
+		actions.append("skill_f")
+		return true
+	# 원거리 견제: 같은 깊이 150~450
+	if absf(dx) >= 150.0 and absf(dx) <= 450.0 and absf(dy) <= 10.0 and facing_ok and _ready(p, "skill_w"):
+		actions.append("skill_w")
+		return true
+	if absf(dx) >= 120.0 and absf(dx) <= 250.0 and absf(dy) <= 14.0 and facing_ok and _ready(p, "skill_a"):
+		actions.append("skill_a")
+		return true
+	if absf(dx) <= 90.0 and absf(dy) <= 14.0 and facing_ok and not target.is_stagger_immune():
+		if target.state == &"launched" and _ready(p, "skill_d"):
+			actions.append("skill_d")
+			return true
+		if _ready(p, "skill_s") and target.height <= 0.0 and target.state != &"down" and target.state != &"getup":
+			actions.append("skill_s")
+			return true
+		if _ready(p, "skill_d") and target.state != &"down" and target.state != &"getup":
+			actions.append("skill_d")
+			return true
+	return false
+
 func test_real_fight_three_sites_two_strategies() -> void:
+	# HWR-004: 같은 거점·강화 없음·동료 없음 조건에서 평타만(nearest, HWR-003 기준) / 평타+A/S(basic) / 상황별 8스킬(skills) 비교
 	for site_id in [&"ch1_farm", &"ch1_store", &"ch1_pass"]:
-		for strategy in ["nearest", "ranged_first"]:
+		for strategy in ["nearest", "basic", "skills"]:
 			var b: Battle = await make_battle()
 			b.start_encounter(data.site(site_id), "run_auto_%s_%s" % [site_id, strategy], null, 20.0, 100)
 			var r := auto_play(b, strategy)
@@ -1851,7 +1972,10 @@ func test_real_fight_three_sites_two_strategies() -> void:
 			for rid in [&"battle_1", &"battle_2", &"battle_3", &"boss"]:
 				var st: Dictionary = r.rooms.get(rid, {"combat_ticks": 0, "damage_taken": 0, "kills": 0})
 				parts.append("%s %.1f초/피해%d/처치%d" % [rid, int(st.combat_ticks) / 60.0, int(st.damage_taken), int(st.kills)])
-			fight_reports.append("%s [%s] %s %.1f초 체력 %d/%d 받은 피해 %d 처치 %d | %s" % [site_id, strategy, r.outcome, r.ticks / 60.0, r.hp, r.max_hp, r.damage, r.kills, " · ".join(parts)])
+			var uses: Array[String] = []
+			for k in r.skill_uses.keys():
+				uses.append("%s×%d" % [k, r.skill_uses[k]])
+			fight_reports.append("%s [%s] %s %.1f초 체력 %d/%d 받은 피해 %d 처치 %d 강인병 공격 %d 무너짐 %d 방어 %d 스킬 %s | %s" % [site_id, strategy, r.outcome, r.ticks / 60.0, r.hp, r.max_hp, r.damage, r.kills, r.brute_attacks, r.brute_staggers, r.parries, ",".join(uses), " · ".join(parts)])
 			b.queue_free()
 			await process_frame
 
@@ -1919,6 +2043,86 @@ func test_h4_1_enemy_damage_doubled_on_every_path() -> void:
 	idle(b, 8)
 	check(e2.total_damage_taken == 20, "플레이어 평타 20 유지 (%d)" % e2.total_damage_taken)
 	check(is_equal_approx(comp.def.attack_damage, 7.0), "아야 화살 7 유지")
+	b.queue_free()
+
+# ------------------------------------------------------------------ HWR-004 R1 검수 2: 강인병 교체 배치
+
+func test_h4_2_brute_placement_table() -> void:
+	var table := {
+		&"ch1_farm": {&"battle_1": [0, 0], &"battle_2": [1, 0], &"battle_3": [1, 1]},
+		&"ch1_store": {&"battle_1": [0, 1], &"battle_2": [0, 1], &"battle_3": [0, 1]},
+		&"ch1_pass": {&"battle_1": [1, 1], &"battle_2": [1, 1], &"battle_3": [1, 1]},
+	}
+	var totals := {&"ch1_farm": 21, &"ch1_store": 23, &"ch1_pass": 24}
+	for site_id in table.keys():
+		var d: DungeonDef = data.site(site_id).dungeon
+		check(d.validate().is_empty() and d.enemy_count() == totals[site_id], "%s: 정의 유효, 일반 적 총 %d" % [site_id, d.enemy_count()])
+		for rid in table[site_id].keys():
+			var room: RoomDef = d.room(rid)
+			check(room.waves.size() == 2, "%s/%s 2웨이브" % [site_id, rid])
+			for wi in room.waves.size():
+				var w: EncounterWave = room.waves[wi]
+				var n := 0
+				for k in w.enemy_kinds:
+					if k == &"brute":
+						n += 1
+				check(n == table[site_id][rid][wi] and n <= 1 and w.enemy_kinds.size() <= 5, "%s/%s 웨이브 %d 강인병 %d (표 %d), 동시 %d ≤ 5" % [site_id, rid, wi + 1, n, table[site_id][rid][wi], w.enemy_kinds.size()])
+	# 실제 출현: 농촌 battle_2 1웨이브에 강인병 1, 첫 등장 안내 1회
+	var b: Battle = await make_battle()
+	b.start_encounter(data.site(&"ch1_farm"), "run_h4_place", null, 20.0, 100)
+	settle(b)
+	enter(b, &"battle_1")
+	flush_spawns(b)
+	check(count_of(b.enemies, BruteEnemy) == 0 and not b.brute_hint_shown, "농촌 battle_1 1웨이브 강인병 0, 안내 없음")
+	clear_room(b)
+	enter(b, &"battle_2")
+	flush_spawns(b)
+	var br := count_of(b.enemies, BruteEnemy)
+	check(br == 1 and b.brute_hint_shown and b.room_message.begins_with("큰 적은"), "농촌 battle_2 1웨이브 강인병 1, 첫 등장 안내 (%s)" % b.room_message)
+	for e in b.enemies:
+		if e is BruteEnemy:
+			check(e.max_hp == 180 and e.hp == 180 and e.required_for_victory, "강인병 체력 180, 승리 조건 포함")
+	b.queue_free()
+
+# ------------------------------------------------------------------ HWR-004 R1 추가 인수 8: 방 전이·출정 종료 시 잔여 스킬 이벤트 정리
+
+func test_h4_8_transition_and_resolve_clear_skill_events() -> void:
+	var b: Battle = await make_battle()
+	b.start_encounter(data.site(&"ch1_farm"), "run_h4_trans", null, 20.0, 100)
+	settle(b)
+	var p := b.player
+	# W 발사 뒤 문 이동: 비행 중 검기 제거. R 시전 중 문 이동: 남은 타격·판정 제거, 재사용은 유지
+	var dir := door_dir_to(b, &"battle_1")
+	place(p, 400, 545)
+	p.facing = 1
+	press(b, "skill_w")
+	idle(b, 7)
+	check(b.projectiles.size() == 1, "검기 비행 중")
+	check(b.use_door(dir), "문 이동 시작")
+	check(b.projectiles.is_empty() and p.active_hitboxes.is_empty() and p.state == &"ground", "전이 시작에 검기·판정 정리")
+	settle(b)
+	var sr: SkillData = p.skills_by_action[&"skill_r"]
+	var se: SkillData = p.skills_by_action[&"skill_e"]
+	clear_room(b)
+	place(p, 400, 545)
+	press(b, "skill_r")
+	idle(b, 12)   # 1타 판정 생성 뒤
+	check(p.state == &"skill" and p.multi_fired.size() >= 1, "일섬연무 진행 중")
+	var cd_r := p.cooldown_for(sr)
+	check(b.use_door(door_dir_to(b, &"battle_2")), "R 도중 문 이동")
+	check(p.active_hitboxes.is_empty() and p.multi_fired.is_empty() and p.state == &"ground" and p.action_lock_ticks == 0, "전이: 남은 타격 이벤트·제한 정리")
+	var hits := [0]
+	b.hit_applied.connect(func(a, _t, _i): if a == p: hits[0] += 1)
+	settle(b)
+	idle(b, 60)
+	check(hits[0] == 0 and p.cooldown_for(sr) == cd_r - 60, "새 방에서 잔여 타격 0, R 재사용은 전이 중 멈췄다가 계속 (%d)" % p.cooldown_for(sr))
+	# E 방어 창·반격 예약은 출정 종료(포기)에 정리
+	clear_room(b)
+	place(p, 400, 545)
+	press(b, "skill_e")
+	p.pending_counter = true
+	b.abandon()
+	check(not p.pending_counter and not p.guard_consumed and p.active_hitboxes.is_empty(), "출정 종료: 방어 창·반격 예약 정리")
 	b.queue_free()
 
 # ------------------------------------------------------------------ 화면 흐름

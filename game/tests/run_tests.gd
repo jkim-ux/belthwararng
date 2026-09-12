@@ -54,7 +54,13 @@ func _initialize() -> void:
 		"test_h4_e_arrows_boss_charge_brute_combo",
 		"test_h4_r_five_hits_once_no_cancel_and_interrupt",
 	]
+	var only := ""
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--only="):
+			only = a.trim_prefix("--only=")
 	for t in tests:
+		if only != "" and not t.contains(only):
+			continue
 		await _run(t)
 	print("=== 결과: 통과 %d, 실패 %d ===" % [_pass, _fail])
 	for f in _failures:
