@@ -1,0 +1,22 @@
+[gd_resource type="Resource" script_class="SiteDef" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/site_def.gd" id="1"]
+[ext_resource type="Resource" path="res://data/campaign/dungeons/ch1_pass_dungeon.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = &"ch1_pass"
+display_name = "고개 초소"
+chapter_id = &"ch1"
+kind = &"fort"
+implemented = true
+description = "고개를 막은 군사 초소. 6방 던전: 일반 적 24명 → 초소 대장(600). 관리도·정비 없음."
+prerequisite_site_id = &"ch1_store"
+prerequisite_management = 60
+dungeon = ExtResource("2")
+player_start = Vector2(260, 560)
+first_reward = 100
+repeat_reward = 20
+scene_occupied = "초소 망루에 적 깃발. 봉화는 꺼져 있다."
+scene_liberated = "봉화가 처음으로 켜졌다. 고개 너머 길이 열렸다."
+scene_repaired = ""

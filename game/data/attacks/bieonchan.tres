@@ -1,0 +1,26 @@
+[gd_resource type="Resource" script_class="AttackData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/attack_data.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = &"bieonchan"
+display_name = "돌진베기"
+startup_ms = 70
+active_ms = 130
+recovery_ms = 200
+chain_window_ms = 0
+move_cancel_ms = 100
+dodge_after_active = false
+damage_mult = 1.2
+strong = false
+hitstun_ms = 360
+knockback = 60
+launch = false
+launch_velocity = 0
+reach_forward = 80
+reach_back = 10
+depth_tolerance = 22
+z_min = -10
+z_max = 90
+dash_distance = 200

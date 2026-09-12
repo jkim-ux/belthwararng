@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="SkillData" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/skill_data.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = &"yusubangyeok"
+display_name = "흘려받기"
+key_label = "E"
+action_name = &"skill_e"
+cooldown_ms = 14000
+implemented = false
+ground_only = true

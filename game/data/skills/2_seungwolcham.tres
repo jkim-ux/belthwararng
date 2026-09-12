@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="SkillData" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/skill_data.gd" id="1"]
+[ext_resource type="Resource" path="res://data/attacks/seungwolcham.tres" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = &"seungwolcham"
+display_name = "올려베기"
+key_label = "S"
+action_name = &"skill_s"
+cooldown_ms = 6000
+implemented = true
+ground_only = true
+attack = ExtResource("2")

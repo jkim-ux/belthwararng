@@ -20,6 +20,7 @@
 | [docs/CAMPAIGN_SYSTEMS.md](docs/CAMPAIGN_SYSTEMS.md) | 마을·경제·동료·보상·저장 |
 | [CLAUDE.md](CLAUDE.md) | 개발 공통 진행 규칙 |
 | [reports/README.md](reports/README.md) | 완료 보고 형식 |
+| [game/README.md](game/README.md) | Godot 프로젝트 실행 방법, 조작, 자동 검증 (HWR-001 부터) |
 
 ## 기존 구현과 실행
 확인 당시 HWR-001~003 코드는 [claude/upbeat-mayer-r3t54f 브랜치](https://github.com/jkim-ux/belthwararng/tree/claude/upbeat-mayer-r3t54f/game)에 있고 [게임 실행 안내](https://github.com/jkim-ux/belthwararng/blob/claude/upbeat-mayer-r3t54f/game/README.md)를 제공한다. [초안 PR #1](https://github.com/jkim-ux/belthwararng/pull/1)은 검토 시점에 미병합이다.

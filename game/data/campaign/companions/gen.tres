@@ -1,0 +1,27 @@
+[gd_resource type="Resource" script_class="CompanionDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/companion_def.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = &"gen"
+display_name = "창병 겐"
+role = "전방 견제·긴 사거리 근접"
+unlock_chapter_id = &"ch2"
+implemented = false
+description = "챕터 2 클리어로 합류 예정. 나루의 피난 행렬을 지키던 창병."
+join_text = ""
+max_hp = 60
+attack_damage = 7.0
+fire_interval_ms = 1500
+aim_ms = 250
+attack_range = 360
+follow_distance = 100
+move_speed_x = 260
+move_speed_y = 170
+projectile_speed = 600
+projectile_max_distance = 360
+projectile_life_ms = 600
+projectile_height = 35
+projectile_half_height = 4
+projectile_half_depth = 4

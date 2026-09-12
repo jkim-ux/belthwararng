@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="SkillSet" load_steps=10 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/skill_set.gd" id="1"]
+[ext_resource type="Resource" path="res://data/skills/1_bieonchan.tres" id="2"]
+[ext_resource type="Resource" path="res://data/skills/2_seungwolcham.tres" id="3"]
+[ext_resource type="Resource" path="res://data/skills/3_nakhwagyeok.tres" id="4"]
+[ext_resource type="Resource" path="res://data/skills/4_hoepungcham.tres" id="5"]
+[ext_resource type="Resource" path="res://data/skills/5_pajingyeok.tres" id="6"]
+[ext_resource type="Resource" path="res://data/skills/6_banwolgeomgi.tres" id="7"]
+[ext_resource type="Resource" path="res://data/skills/7_yusubangyeok.tres" id="8"]
+[ext_resource type="Resource" path="res://data/skills/8_hwarangnanmu.tres" id="9"]
+
+[resource]
+script = ExtResource("1")
+skills = [ExtResource("2"), ExtResource("3"), ExtResource("4"), ExtResource("5"), ExtResource("6"), ExtResource("7"), ExtResource("8"), ExtResource("9")]
