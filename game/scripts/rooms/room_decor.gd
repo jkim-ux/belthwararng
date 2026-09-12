@@ -41,8 +41,10 @@ func _draw() -> void:
 		var lp := Vector2(zone.position.x, zone.position.y - 8)
 		if dir == &"east":
 			lp.x = zone.end.x - 200
+		elif dir == &"north":
+			lp = Vector2(zone.end.x + 10, zone.position.y + 18)
 		elif dir == &"south":
-			lp.y = zone.position.y - 12
+			lp = Vector2(zone.end.x + 10, zone.position.y + 18)
 		draw_string(f, lp, label, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, col.lightened(0.3))
 	var prompt := battle.interact_prompt()
 	if prompt != "":
