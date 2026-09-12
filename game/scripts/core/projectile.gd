@@ -4,6 +4,8 @@ extends Node2D
 ## 적/경기장 끝/최대 사거리/수명에서 종료하고 같은 팀은 관통한다. 명중 시 단일 대상 피해 후 제거된다.
 ## 판정 x 범위는 이전 틱 위치~현재 위치의 이동 구간 전체다(빠른 화살이 대상을 뚫고 지나가지 않게).
 ## 최대 사거리·수명이 끝나는 틱에는 expiring 만 표시하고, Battle 이 그 마지막 구간을 판정한 뒤 제거한다.
+## HWR-004 검기: pierce_max > 0 이면 이동 구간의 최초 접촉 거리순으로 최대 N 명을 각각 1회 맞히고 N 번째 적중 직후 소멸.
+##   무적/같은 팀은 통과하며 관통 수를 소모하지 않고, 통과한 대상은 뒤늦게 재타격하지 않는다(passed_targets).
 
 var team: StringName = &"player"
 var shooter: Node
@@ -22,6 +24,10 @@ var traveled: float = 0.0
 var alive: bool = true
 var expiring: bool = false      ## 이번 틱 판정 뒤 제거
 var prev_x: float = 0.0         ## 이전 틱 바닥 x(이동 구간 판정용)
+var pierce_max: int = 0         ## 0 = 단일 대상(화살). 양수 = 최대 적중 적 수(검기)
+var passed_targets: Array = []  ## 이미 처리(적중 또는 무적 통과)한 대상 instance id
+var hits_done: int = 0
+var action_id: int = 0
 
 func setup(p_team: StringName, p_shooter: Node, p_attack: AttackData, p_damage: float, start: Vector2, p_height: float, p_facing: int, speed: float, p_max_distance: float, p_life_ticks: int, p_half_height: float, p_half_depth: float) -> void:
 	team = p_team
@@ -73,6 +79,21 @@ func z_range() -> Vector2:
 	return Vector2(height - half_height, height + half_height)
 
 func _draw() -> void:
+	if pierce_max > 0:
+		# 검기: 세로로 선 초승달 모양의 빛
+		var y := -height
+		var col := Color(0.6, 0.9, 1.0, 0.9)
+		var pts := PackedVector2Array()
+		for i in 9:
+			var t := float(i) / 8.0
+			var ay := lerpf(-half_height - 6.0, half_height + 6.0, t)
+			pts.append(Vector2(float(facing) * (half_length - 4.0 * absf(t - 0.5) * 2.0), y + ay))
+		draw_polyline(pts, col, 3.0)
+		draw_line(Vector2(-half_length * facing, y), Vector2(half_length * facing, y), Color(0.8, 0.95, 1.0, 0.5), 2.0)
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2(1.0, 0.4))
+		draw_circle(Vector2.ZERO, 6.0, Color(0, 0, 0, 0.2))
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+		return
 	# 그림자와 화살대(적 화살은 어두운 색)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2(1.0, 0.4))
 	draw_circle(Vector2.ZERO, 5.0, Color(0, 0, 0, 0.25))

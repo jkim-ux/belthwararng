@@ -11,3 +11,4 @@ action_name = &"skill_e"
 cooldown_ms = 14000
 implemented = false
 ground_only = true
+hint = "정면 한 타 방어 → 반격"

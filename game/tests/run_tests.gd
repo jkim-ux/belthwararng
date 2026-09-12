@@ -42,6 +42,13 @@ func _initialize() -> void:
 		"test_h4_brute_slam_ellipse_and_slot",
 		"test_h4_brute_guard_break_stagger_once",
 		"test_h4_boss_hitstop_policy_selection_and_recover_step",
+		# --- HWR-004 R1: D/F/Q/W
+		"test_h4_skill_d_knockdown_ground_air_down_getup",
+		"test_h4_skill_f_both_sides_once_outward",
+		"test_h4_skill_q_normal_brute_boss",
+		"test_h4_skill_w_pierce_order_limits_and_reactions",
+		"test_h4_new_skill_cancel_lock_cooldown_and_air",
+		"test_h4_skill_damage_at_attack_21",
 	]
 	for t in tests:
 		await _run(t)
@@ -235,7 +242,8 @@ func test_expired_input_does_not_fire(b: Battle) -> void:
 func test_unimplemented_skill_ignored(b: Battle) -> void:
 	var p := b.player
 	place(p, 300, 540)
-	for a in ["skill_d", "skill_f", "skill_q", "skill_w", "skill_e", "skill_r"]:
+	# HWR-004 3단계: D/F/Q/W 구현. E/R 은 4단계에서 구현한다.
+	for a in ["skill_e", "skill_r"]:
 		press(b, a)
 		idle(b, 2)
 		check(p.state == &"ground" and p.buffered_action == &"", "미구현 %s 은 무시되고 보관도 안 됨 (state %s)" % [a, p.state])
@@ -952,3 +960,326 @@ func test_h4_boss_hitstop_policy_selection_and_recover_step(b: Battle) -> void:
 		hit_with(boss, 1)
 		b.step(PlayerInput.make())
 	check(absf(boss.floor_pos.x - sx - 300.0) < 0.01, "돌진 중 매 틱 피격에도 300px 이동 (%.0f)" % (boss.floor_pos.x - sx))
+
+# ------------------------------------------------------------------ HWR-004 R1: D/F/Q/W
+
+func big_enemy(b: Battle, x: float, y: float) -> MeleeEnemy:
+	var e := b.spawn_melee_enemy(Vector2(x, y))
+	e.max_hp = 100000
+	e.hp = e.max_hp
+	e.change_state(&"idle")
+	e.state_ticks = -1000000
+	return e
+
+func skill(b: Battle, key: String) -> SkillData:
+	return b.player.skills_by_action[StringName("skill_" + key)]
+
+func test_h4_skill_d_knockdown_ground_air_down_getup(b: Battle) -> void:
+	var p := b.player
+	place(p, 300, 540)
+	var e := big_enemy(b, 380, 540)
+	var sd := skill(b, "d")
+	check(sd.implemented and sd.attack.startup_ticks() == 9 and sd.attack.active_ticks() == 5 and sd.attack.recovery_ticks() == 16 and sd.cooldown_ticks() == 480, "내려베기 9/5/16 틱, 재사용 480틱")
+	press(b, "skill_d")
+	check(p.state == &"skill" and p.cooldown_for(sd) == 480, "내려베기 시작·재사용 적용")
+	idle(b, 9)
+	check(e.total_damage_taken == 44 and e.state == &"down" and absf(e.floor_pos.x - 380.0) < 0.001, "지상 적: 피해 44, 즉시 다운, 수평 밀림 0 (%s, %d)" % [e.state, e.total_damage_taken])
+	var down_t := e.state_ticks
+	# 다운 중 재차 내려베기: 피해만, 다운 타이머 재시작 없음
+	idle(b, 25)
+	p.cooldowns[sd.id] = 0
+	var dt_before := e.state_ticks
+	press(b, "skill_d")
+	idle(b, 9)
+	check(e.total_damage_taken == 88 and e.state == &"down" and e.state_ticks == dt_before + 10, "다운 중 피해만, 타이머 유지 (state_ticks %d → %d)" % [dt_before, e.state_ticks])
+	# 다운 0.6초 → 기상 보호 0.5초(무적) → 대기
+	while e.state == &"down":
+		idle(b, 1)
+	check(e.state == &"getup" and e.invuln_ticks == 30, "다운 36틱 뒤 기상 보호 30틱 (%s, 무적 %d)" % [e.state, e.invuln_ticks])
+	p.cooldowns[sd.id] = 0
+	press(b, "skill_d")
+	idle(b, 9)
+	check(e.total_damage_taken == 88 and e.state == &"getup", "기상 보호 중 피해 없음 (%d, %s)" % [e.total_damage_taken, e.state])
+	idle(b, 40)
+	check(e.state == &"idle", "기상 뒤 대기 (%s)" % e.state)
+	# 실제 S→D 시간표(검수 6): 올려베기 t6 띄움(양쪽 강공격 히트스톱 4틱, vz 520 → 체공 25틱 → 착지 t34), S 종료 t30,
+	# 내려베기 준비 9틱 → 적중 t40. 적은 이미 착지해 down 이므로 D 는 '다운 중 피해만' 이다. 수치로 콤보를 주장하지 않고 실측을 기록한다.
+	place(p, 300, 540)
+	place(e, 370, 540)
+	e.change_state(&"idle")
+	e.state_ticks = -1000000
+	e.total_damage_taken = 0
+	p.cooldowns[skill(b, "s").id] = 0
+	p.cooldowns[sd.id] = 0
+	press(b, "skill_s")
+	var tk := 0
+	var launch_tick := -1
+	var land_tick := -1
+	var d_hit_tick := -1
+	var state_at_d_hit: StringName = &""
+	var pressed_d := false
+	var d_press_tick := -1
+	while tk < 120:
+		if not pressed_d and p.state == &"ground":
+			press(b, "skill_d")
+			pressed_d = true
+			d_press_tick = tk
+		else:
+			idle(b, 1)
+		tk += 1
+		if launch_tick < 0 and e.state == &"launched":
+			launch_tick = tk
+		if launch_tick >= 0 and land_tick < 0 and e.height <= 0.0 and e.state != &"launched":
+			land_tick = tk
+		if pressed_d and d_hit_tick < 0 and e.total_damage_taken >= 30 + 44:
+			d_hit_tick = tk
+			state_at_d_hit = e.state
+		if d_hit_tick >= 0 and tk > d_hit_tick + 5:
+			break
+	print("    [측정] S→D: 띄움 t%d, 착지 t%d, D 입력 t%d, D 적중 t%d, 적중 시 적 상태 %s" % [launch_tick, land_tick, d_press_tick, d_hit_tick, state_at_d_hit])
+	check(launch_tick == 6 and land_tick == 34 and d_press_tick == 30 and d_hit_tick == 40 and state_at_d_hit == &"down", "S→D 실측: 띄움 6/착지 34/D 입력 30/적중 40 (다운 중 피해만) — 공중에서 연결되지 않음")
+	check(e.total_damage_taken == 74, "S 30 + D 44 = 74 (%d)" % e.total_damage_taken)
+	# 공중 적 규칙 자체: 떠 있는 적(높이 60, vz 0)에 D → z 를 옮기지 않고 vz ≤ -500, 착지 전 추가 띄우기 금지, 착지 후 다운
+	idle(b, 60)
+	place(p, 300, 540)
+	place(e, 370, 540, 60.0)
+	e.change_state(&"launched")
+	e.airborne_by_launch = true
+	e.vz = 0.0
+	e.total_damage_taken = 0
+	p.cooldowns[sd.id] = 0
+	press(b, "skill_d")
+	for i in 8:
+		e.height = 60.0
+		e.vz = 0.0
+		idle(b, 1)
+	var h_before := e.height
+	idle(b, 1)
+	check(e.total_damage_taken == 44 and e.vz <= -500.0 and e.height > 0.0 and absf(e.height - h_before) < 20.0, "공중 적중: vz %.0f ≤ -500, 순간 이동 없음(높이 %.0f→%.0f)" % [e.vz, h_before, e.height])
+	var li := HitInfo.new()
+	li.attack = load("res://data/attacks/seungwolcham.tres")
+	li.damage = 1
+	li.hitstop_ticks = 0
+	li.direction = 1
+	e.receive_hit(li)
+	check(e.vz <= -500.0 and e.height > 0.0, "착지 전 추가 띄우기 없음 (vz %.0f)" % e.vz)
+	var landed := false
+	for i in 60:
+		idle(b, 1)
+		if e.height <= 0.0:
+			landed = true
+			break
+	check(landed and e.state == &"down", "실제 착지 후 다운 (%s)" % e.state)
+
+func test_h4_skill_f_both_sides_once_outward(b: Battle) -> void:
+	var p := b.player
+	place(p, 640, 540)
+	place(b.dummy, 1200, 700)
+	place(b.knockback_dummy, 1200, 720)
+	var right := big_enemy(b, 720, 540)
+	var left := big_enemy(b, 560, 540)
+	var far := big_enemy(b, 800, 540)
+	var deep := big_enemy(b, 700, 590)
+	var sd := skill(b, "f")
+	check(sd.attack.startup_ticks() == 5 and sd.attack.active_ticks() == 5 and sd.attack.recovery_ticks() == 14 and sd.cooldown_ticks() == 600, "회전베기 5/5/14 틱, 재사용 600틱")
+	var hits := [0]
+	b.hit_applied.connect(func(a, _t, _i): if a == p: hits[0] += 1)
+	press(b, "skill_f")
+	idle(b, 5)
+	check(right.total_damage_taken == 36 and left.total_damage_taken == 36, "양쪽 36 (%d/%d)" % [right.total_damage_taken, left.total_damage_taken])
+	check(right.knockback_dir == 1 and left.knockback_dir == -1 and right.hitstun_ticks == 18 and left.knockback_total == 20.0, "바깥으로 20px 밀림·300ms 경직")
+	idle(b, 30)
+	check(hits[0] == 2 and far.total_damage_taken == 0 and deep.total_damage_taken == 0, "대상당 1회(총 %d), 범위 밖(x 160)·깊이 50 은 빗나감" % hits[0])
+	check(right.floor_pos.x > 720.0 + 19.0 and left.floor_pos.x < 560.0 - 19.0, "밀림 결과 좌우 바깥 (%.0f / %.0f)" % [right.floor_pos.x, left.floor_pos.x])
+
+func test_h4_skill_q_normal_brute_boss(b: Battle) -> void:
+	var p := b.player
+	place(p, 300, 540)
+	var e := big_enemy(b, 380, 540)
+	var sd := skill(b, "q")
+	check(sd.attack.startup_ticks() == 15 and sd.attack.active_ticks() == 6 and sd.attack.recovery_ticks() == 21 and sd.cooldown_ticks() == 720, "방어깨기 15/6/21 틱, 재사용 720틱")
+	press(b, "skill_q")
+	idle(b, 15)
+	check(e.total_damage_taken == 60 and e.state == &"hitstun" and e.hitstun_ticks == 27 and e.knockback_total == 35.0, "일반 적: 60, 경직 450ms(27틱), 밀림 35 (%s)" % e.state)
+	check(p.hitstop_ticks == 4, "공격자 타격 정지 강공격 4틱")
+	idle(b, 60)
+	b.enemies.erase(e)
+	e.free()
+	# 강인병: 60 피해 + 무너짐, 피격 타격 정지 0
+	place(p, 300, 540)
+	var br := b.spawn_brute_enemy(Vector2(390, 540))
+	br.state = &"idle"
+	br.state_ticks = 1000
+	for i in 100:
+		idle(b, 1)
+		if br.state == &"telegraph":
+			break
+	p.cooldowns[sd.id] = 0
+	press(b, "skill_q")
+	idle(b, 15)
+	check(br.total_damage_taken == 60 and br.state == &"stagger" and br.hitstop_ticks == 0 and not b.attack_slot_holders.has(br), "강인병: 60·무너짐·타격 정지 0·허가 반환 (%s)" % br.state)
+	idle(b, 30)
+	b.enemies.erase(br)
+	br.free()
+	# 보스: 어느 상태에서도 피해만
+	place(p, 300, 540)
+	var boss := b.spawn_captain(Vector2(390, 540))
+	boss.change_state(&"idle")
+	boss.state_ticks = -100000
+	p.cooldowns[sd.id] = 0
+	press(b, "skill_q")
+	idle(b, 15)
+	check(boss.hp == 540 and boss.state == &"idle" and boss.hitstop_ticks == 0, "보스 대기 중 Q: 피해 60, 상태 유지, 타격 정지 0 (%s)" % boss.state)
+	idle(b, 40)
+	boss.state_ticks = 1000
+	for i in 100:
+		idle(b, 1)
+		if boss.state == &"telegraph":
+			break
+	var st := boss.state
+	p.cooldowns[sd.id] = 0
+	place(p, boss.floor_pos.x - 80.0 * boss.facing * -1, 540)
+	press(b, "skill_q")
+	idle(b, 15)
+	check(boss.hp == 480 and boss.state == st, "보스 패턴 중 Q: 피해만, 패턴 유지 (%s)" % boss.state)
+
+func test_h4_skill_w_pierce_order_limits_and_reactions(b: Battle) -> void:
+	var p := b.player
+	place(p, 200, 540)
+	p.facing = 1
+	# 등록 순서를 거꾸로(먼 적부터) 두어 배열 순서가 아니라 접촉 거리순임을 확인한다
+	var e700 := big_enemy(b, 700, 540)
+	var e600 := big_enemy(b, 600, 540)
+	var e500 := big_enemy(b, 500, 540)
+	var e400 := big_enemy(b, 400, 540)
+	var sd := skill(b, "w")
+	check(sd.attack.startup_ticks() == 6 and sd.attack.active_ticks() == 3 and sd.attack.recovery_ticks() == 12 and sd.cooldown_ticks() == 420, "검기 6/3/12 틱, 재사용 420틱")
+	var melee_hb := [0]
+	press(b, "skill_w")
+	var fired_tick := -1
+	for i in 30:
+		if not p.active_hitboxes.is_empty():
+			melee_hb[0] += 1
+		idle(b, 1)
+		if fired_tick < 0 and b.projectiles.size() > 0:
+			fired_tick = i
+	check(fired_tick == 5 and melee_hb[0] == 0, "t=6 에 투사체 1개, 근접 판정 0 (발사 %d)" % (fired_tick + 1))
+	idle(b, 30)
+	check(e400.total_damage_taken == 32 and e500.total_damage_taken == 32 and e600.total_damage_taken == 32 and e700.total_damage_taken == 0, "가까운 3명만 32 (%d/%d/%d/%d)" % [e400.total_damage_taken, e500.total_damage_taken, e600.total_damage_taken, e700.total_damage_taken])
+	check(b.projectiles.is_empty(), "세 번째 적중 직후 소멸")
+	check(e400.hitstun_ticks == 12 and e400.knockback_total == 10.0, "일반 적 200ms 경직·10px 밀림")
+	# 무적/아군 통과: 관통 수 미소비, 뒤늦게 재타격 없음
+	idle(b, 40)
+	for e in [e400, e500, e600, e700]:
+		e.total_damage_taken = 0
+		e.change_state(&"idle")
+		e.state_ticks = -1000000
+	var inv := big_enemy(b, 300, 540)
+	inv.invuln_ticks = 100000
+	var ally := Dummy.new()
+	b.actors_root.add_child(ally)
+	ally.configure(b.tuning, b, Vector2(350, 540))
+	ally.team = &"player"
+	b.allies.append(ally)
+	p.cooldowns[sd.id] = 0
+	press(b, "skill_w")
+	idle(b, 60)
+	check(inv.total_damage_taken == 0 and ally.total_damage_taken == 0 and e400.total_damage_taken == 32 and e600.total_damage_taken == 32 and e700.total_damage_taken == 0, "무적·아군 통과(미소비), 그 뒤 3명 (%d/%d/%d/%d)" % [inv.total_damage_taken, e400.total_damage_taken, e600.total_damage_taken, e700.total_damage_taken])
+	b.allies.erase(ally)
+	ally.free()
+	# 무적이 풀려도 이미 지나간 검기는 재타격하지 않는다(다음 검기까지 대기 없음)
+	inv.invuln_ticks = 0
+	idle(b, 10)
+	check(inv.total_damage_taken == 0, "지나간 대상 재타격 없음")
+	# 사거리: 시작 x+30 에서 500 이동. 시작 230 → 중심 730 까지, 반길이 10 → 740 근처까지 판정. 760 의 적(피격 738~782) 은 맞고 800 은 안 맞음
+	idle(b, 30)
+	for e in b.enemies.duplicate():
+		if e is MeleeEnemy:
+			b.enemies.erase(e)
+			e.free()
+	var e760 := big_enemy(b, 760, 540)
+	var e800 := big_enemy(b, 800, 540)
+	place(p, 200, 540)
+	p.cooldowns[sd.id] = 0
+	press(b, "skill_w")
+	idle(b, 60)
+	check(e760.total_damage_taken == 32 and e800.total_damage_taken == 0 and b.projectiles.is_empty(), "사거리 500(+반길이 10) 안 적중, 밖 미적중, 만료 제거 (%d/%d)" % [e760.total_damage_taken, e800.total_damage_taken])
+	# 왼쪽 방향·보스 반응(피해만)
+	idle(b, 10)
+	var boss := b.spawn_captain(Vector2(300, 540))
+	boss.change_state(&"idle")
+	boss.state_ticks = -100000
+	place(p, 500, 540)
+	face_left(b)
+	p.cooldowns[sd.id] = 0
+	press(b, "skill_w")
+	idle(b, 30)
+	check(boss.hp == 600 - 32 and boss.state == &"idle" and boss.hitstop_ticks == 0, "왼쪽 검기: 보스 피해 32 만, 경직 없음 (%s)" % boss.state)
+
+func test_h4_new_skill_cancel_lock_cooldown_and_air(b: Battle) -> void:
+	var p := b.player
+	var sa := skill(b, "a")
+	for key in ["d", "f", "q", "w"]:
+		place(p, 300, 540)
+		p.velocity = Vector2.ZERO
+		var sd := skill(b, key)
+		p.cooldowns[sd.id] = 0
+		p.cooldowns[sa.id] = 0
+		press(b, "skill_" + key)
+		var total: int = sd.attack.total_ticks()
+		var mc: int = sd.attack.move_cancel_ticks()
+		idle(b, total - mc - 1)
+		check(p.state == &"skill" and p.attack_t() == total - mc - 1, "%s: 이동 취소 창 직전 (t=%d)" % [key, p.attack_t()])
+		# 이동 + 다른 스킬(A) 동시 입력: 이동 취소는 되지만 A 는 원래 종료(t=total)까지 실행되지 않는다
+		b.step(PlayerInput.make(Vector2(1, 0), ["skill_a"]))
+		check(p.state == &"ground" and p.action_lock_ticks == mc and p.cooldown_for(sa) == 0, "%s: 이동 취소 뒤 남은 제한 %d틱, A 미실행" % [key, p.action_lock_ticks])
+		hold(b, Vector2(1, 0), mc - 1)
+		check(p.state == &"ground" and p.cooldown_for(sa) == 0, "%s: 원래 종료 직전까지 A 실행 없음 (lock %d)" % [key, p.action_lock_ticks])
+		hold(b, Vector2(1, 0), 1)
+		check(p.state == &"skill" and p.current_skill == sa, "%s: 원래 종료 시점(t=%d)에 보관한 A 실행" % [key, total])
+		check(p.cooldown_for(sd) == sd.cooldown_ticks() - total, "%s: 재사용은 시작 시 1회, 취소해도 돌려주지 않음 (%d)" % [key, p.cooldown_for(sd)])
+		idle(b, 60)
+	# 회피 취소 뒤에도 제한 유지: D t24 회피 → 회피(11틱) 뒤 평타 가능(원래 종료 t30 < 회피 종료 t35)
+	place(p, 300, 540)
+	var sd := skill(b, "d")
+	p.cooldowns[sd.id] = 0
+	p.dodge_cooldown_ticks = 0
+	press(b, "skill_d")
+	idle(b, 23)
+	press(b, "dodge")
+	check(p.state == &"dodge" and p.action_lock_ticks == 6, "D t24 회피 취소, 남은 제한 6틱")
+	press(b, "attack_light")
+	idle(b, 3)
+	check(p.state == &"dodge", "회피 중 평타 미실행")
+	idle(b, 20)
+	check(p.state == &"ground" or p.state == &"light", "회피 종료 뒤 정상 (%s)" % p.state)
+	# 공중 입력은 나중에 실행되지 않는다
+	idle(b, 30)
+	place(p, 300, 540)
+	p.cooldowns[sd.id] = 0
+	press(b, "jump")
+	idle(b, 3)
+	press(b, "skill_d")
+	idle(b, 40)
+	check(p.state == &"ground" and p.cooldown_for(sd) == 0, "공중에서 누른 D 는 착지 뒤 실행되지 않음 (%s, cd %d)" % [p.state, p.cooldown_for(sd)])
+	# 헛치기도 재사용 소모
+	press(b, "skill_d")
+	check(p.cooldown_for(sd) == 480, "헛치기 시작에도 재사용 480")
+
+func test_h4_skill_damage_at_attack_21(b: Battle) -> void:
+	var p := b.player
+	var d := b.dummy
+	p.attack_power = 21.0
+	var expected := {"d": 46, "f": 38, "q": 63, "w": 34}
+	for key in expected.keys():
+		place(p, 300, 540)
+		place(d, 380, 540)
+		d.change_state(&"idle")
+		d.invuln_ticks = 0
+		d.total_damage_taken = 0
+		var sd := skill(b, key)
+		p.cooldowns[sd.id] = 0
+		press(b, "skill_" + key)
+		idle(b, 40)
+		check(d.total_damage_taken == expected[key], "공격력 21: %s 피해 %d == %d" % [key, d.total_damage_taken, expected[key]])
+		idle(b, 60)

@@ -769,37 +769,72 @@ func _step_projectiles() -> void:
 			pr.step(r)
 
 ## 투사체 판정: 이전 위치~현재 위치의 이동 구간·깊이·높이를 대상과 비교한다(빠른 화살이 대상을 뚫고 지나가지 않게).
-## 같은 팀은 관통, 명중 시 단일 대상 피해 후 제거. 최대 사거리·수명이 끝난 마지막 구간도 판정한 뒤 제거한다.
+## 같은 팀은 관통. 화살(pierce_max 0)은 단일 대상 피해 후 제거, 검기는 최초 접촉 거리순으로 최대 N 명(대상당 1회) 뒤 소멸.
+## 최대 사거리·수명이 끝난 마지막 구간도 판정한 뒤 제거한다. 이동 구간은 경기장 경계까지 절단한다.
+## 주인공의 흘려받기는 진행 방향(vx×방어 방향<0)으로 정면을 판정하며 성공 시 그 화살을 제거한다.
 func _resolve_projectiles() -> void:
 	var actors := all_actors()
+	var r := arena_rect()
 	var keep: Array = []
 	for pr in projectiles:
 		if not is_instance_valid(pr) or not pr.alive:
 			continue
+		var xr: Vector2 = pr.x_range()
+		xr = Vector2(maxf(xr.x, r.position.x), minf(xr.y, r.end.x))
+		var cands: Array = []
 		for target in actors:
-			if target.team == pr.team or not target.can_be_hit():
+			if target.team == pr.team:
 				continue
-			if not _ranges_overlap(pr.x_range(), target.hurt_x_range()):
+			if pr.passed_targets.has(target.get_instance_id()):
+				continue
+			if not _ranges_overlap(xr, target.hurt_x_range()):
 				continue
 			if not _ranges_overlap(pr.y_range(), target.hurt_y_range()):
 				continue
 			if not _ranges_overlap(pr.z_range(), target.hurt_z_range()):
 				continue
+			# 실제 이동 방향의 최초 접촉 거리(동률이면 생성 ID 순). 배우 배열 순서에 의존하지 않는다.
+			var hx := target.hurt_x_range()
+			var contact: float = (hx.x - pr.half_length - pr.prev_x) if pr.facing > 0 else (pr.prev_x - hx.y - pr.half_length)
+			cands.append({"t": target, "d": contact, "id": target.get_instance_id()})
+		cands.sort_custom(func(a, b): return a.d < b.d if not is_equal_approx(a.d, b.d) else a.id < b.id)
+		for c in cands:
+			if not pr.alive:
+				break
+			var target: BattleActor = c.t
+			if pr.pierce_max > 0:
+				pr.passed_targets.append(target.get_instance_id())
+			if not target.can_be_hit():
+				continue   # 무적: 피해·관통 수 없이 통과(재타격하지 않음)
 			var info := HitInfo.new()
-			info.attacker = pr.shooter
+			info.attacker = pr.shooter if is_instance_valid(pr.shooter) else null
 			info.attack = pr.attack
 			info.damage = pr.damage
 			info.hitstop_ticks = 0
 			info.direction = pr.facing
-			if target.receive_hit(info):
-				hits_this_run += 1
-				hit_applied.emit(pr.shooter, target, info)
-				_spawn_damage_number(target, info)
-				_spawn_hit_flash(target, info)
-				var shooter_name: String = pr.shooter.display_name if (pr.shooter != null and is_instance_valid(pr.shooter)) else "화살"
-				log_event("%s → %s %d" % [shooter_name, target.display_name, roundi(info.damage)])
+			info.knockback = pr.attack.knockback
+			info.action_id = pr.action_id
+			info.projectile_id = pr.get_instance_id()
+			info.source_pos = Vector2(pr.prev_x, pr.floor_pos.y)
+			info.attacker_facing = pr.facing
+			info.from_projectile = true
+			if target is Player and target.try_parry(info):
+				parries_this_run += 1
+				_spawn_parry_flash(target)
+				log_event("%s 가 화살을 흘려받음" % target.display_name)
 				pr.finish()
 				break
+			if target.receive_hit(info):
+				hits_this_run += 1
+				hit_applied.emit(info.attacker, target, info)
+				_spawn_damage_number(target, info)
+				_spawn_hit_flash(target, info)
+				var shooter_name: String = pr.shooter.display_name if (pr.shooter != null and is_instance_valid(pr.shooter)) else ("검기" if pr.pierce_max > 0 else "화살")
+				log_event("%s → %s %d" % [shooter_name, target.display_name, roundi(info.damage)])
+				pr.hits_done += 1
+				if pr.pierce_max <= 0 or pr.hits_done >= pr.pierce_max:
+					pr.finish()
+					break
 		if pr.alive and pr.expiring:
 			pr.finish()
 		if pr.alive:

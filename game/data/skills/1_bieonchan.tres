@@ -13,3 +13,4 @@ cooldown_ms = 4000
 implemented = true
 ground_only = true
 attack = ExtResource("2")
+hint = "접근·전방 베기"

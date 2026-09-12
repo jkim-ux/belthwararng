@@ -13,3 +13,4 @@ cooldown_ms = 6000
 implemented = true
 ground_only = true
 attack = ExtResource("2")
+hint = "일반 적 띄우기"
