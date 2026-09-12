@@ -10,8 +10,8 @@ config_version=5
 
 [application]
 
-config/name="화랑전 전투 실험 (HWR-001)"
-config/description="화랑 벨트스크롤 액션 - M0/M1 전투 감각 실험"
+config/name="사무라이 점령전 (HWR-002)"
+config/description="사무라이 벨트스크롤 점령전 - 평타 모멘텀, 첫 챕터 3거점, 궁수 동료"
 run/main_scene="res://scenes/battle.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 
@@ -107,6 +107,11 @@ pause={
 dev_toggle_debug={
 "deadzone": 0.2,
 "events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":4194332,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
+]
+}
+dev_toggle_profile={
+"deadzone": 0.2,
+"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":4194333,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
 ]
 }
 dev_respawn_enemies={

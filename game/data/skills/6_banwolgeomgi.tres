@@ -5,7 +5,7 @@
 [resource]
 script = ExtResource("1")
 id = &"banwolgeomgi"
-display_name = "반월검기"
+display_name = "검기"
 key_label = "W"
 action_name = &"skill_w"
 cooldown_ms = 7000

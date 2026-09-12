@@ -5,7 +5,7 @@
 [resource]
 script = ExtResource("1")
 id = &"yusubangyeok"
-display_name = "유수반격"
+display_name = "흘려받기"
 key_label = "E"
 action_name = &"skill_e"
 cooldown_ms = 14000

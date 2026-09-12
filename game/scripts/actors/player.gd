@@ -1,13 +1,16 @@
 class_name Player
 extends BattleActor
-## 화랑 조작. 입력 보관, 지상 이동, 점프 높이, 회피, 평타 3연격, 스킬 실행을 담당한다.
+## 주인공(사무라이) 조작. 입력 보관, 지상 이동, 점프 높이, 회피, 평타 3연격, 스킬 실행을 담당한다.
 ## 상태: ground, air, dodge, light, air_attack, skill, hitstun, dead
+## R1: 지상 평타는 타격 구간 동안 감속 곡선으로 전진한다(AttackData.advance_px). 전진량은 틱마다 곡선에서
+## 계산하므로 취소·피격·경계로 공격이 끝나면 남은 전진은 자동으로 폐기되고 다음 행동에 새지 않는다.
 
 const ACTION_LIGHT: StringName = &"attack_light"
 const ACTION_JUMP: StringName = &"jump"
 const ACTION_DODGE: StringName = &"dodge"
 const SKILL_ACTIONS: Array[StringName] = [&"skill_a", &"skill_s", &"skill_d", &"skill_f", &"skill_q", &"skill_w", &"skill_e", &"skill_r"]
 const BUFFERABLE_ACTIONS: Array[StringName] = [&"attack_light", &"jump", &"dodge", &"skill_a", &"skill_s", &"skill_d", &"skill_f", &"skill_q", &"skill_w", &"skill_e", &"skill_r"]
+const SWING_TRAIL_TICKS := 4               ## 타격 종료 후 잔상이 남는 틱
 
 var light_attacks: Array[AttackData] = []
 var air_attack: AttackData
@@ -16,6 +19,7 @@ var skills_by_action: Dictionary = {}     ## action_name -> SkillData
 var cooldowns: Dictionary = {}            ## skill id -> 남은 틱
 var dodge_cooldown_ticks: int = 0
 var attack_power: float = 20.0
+var profile_id: StringName = &""
 
 # 입력
 var move_input: Vector2 = Vector2.ZERO
@@ -30,11 +34,13 @@ var light_index: int = 0
 var current_hitbox: HitBox
 var air_attack_used: bool = false
 var dodge_dir: Vector2 = Vector2.RIGHT
+var attack_facing: int = 1                ## 공격 시작 때 고정한 좌우 방향
+var attack_advance_done: float = 0.0      ## 이번 공격에서 곡선으로 요청한 전진 합(디버그 표시용)
 var last_event: String = ""               ## 디버그 표시용
 
 func _init() -> void:
 	team = &"player"
-	display_name = "화랑"
+	display_name = "사무라이"
 	body_color = Color(0.25, 0.55, 0.95)
 
 func configure(p_tuning: CombatTuning, p_battle: Node, start: Vector2, p_lights: Array[AttackData], p_air: AttackData, p_skills: SkillSet) -> void:
@@ -56,6 +62,11 @@ func configure(p_tuning: CombatTuning, p_battle: Node, start: Vector2, p_lights:
 	facing = 1
 	alive = true
 	change_state(&"ground")
+
+## 프로필 적용: 평타 리소스 참조만 바꾼다. 공유 Resource 의 값은 수정하지 않는다.
+func apply_profile(profile: CombatProfile) -> void:
+	light_attacks = profile.light_attacks
+	profile_id = profile.id
 
 ## 개발용 초기화: 위치와 체력, 대기시간을 되돌린다.
 func reset_to(start: Vector2) -> void:
@@ -236,6 +247,7 @@ func _start_dodge() -> void:
 	dodge_dir = dir
 	dodge_cooldown_ticks = Ticks.from_ms(tuning.dodge_cooldown_ms)
 	invuln_ticks = Ticks.from_ms(tuning.dodge_invuln_ms)
+	velocity = Vector2.ZERO
 	change_state(&"dodge")
 	last_event = "회피"
 
@@ -282,6 +294,8 @@ func _start_air_attack() -> void:
 
 ## 입력을 소비한 틱을 공격의 첫 틱(t=0)으로 삼는다. 준비 0 ms 공격은 이 틱에 바로 판정을 만든다.
 func _begin_attack_tick() -> void:
+	attack_facing = facing
+	attack_advance_done = 0.0
 	state_ticks = 1
 	_advance_attack_hitbox()
 
@@ -326,12 +340,23 @@ func _step_attack() -> void:
 		_step_ground()
 		return
 	_advance_attack_hitbox()
-	# 이동: 돌진 구간이면 전진, 아니면 감속
-	if atk.dash_distance > 0.0 and t >= s and t < s + a:
-		velocity = Vector2(facing * atk.dash_distance / (float(a) * Ticks.DT), 0.0)
-	else:
+	var in_active := t >= s and t < s + a
+	if atk.dash_distance > 0.0 and in_active:
+		# 스킬 돌진: 기존 일정 속도 전진
+		velocity = Vector2(attack_facing * atk.dash_distance / (float(a) * Ticks.DT), 0.0)
+		move_by_velocity()
+	elif atk.advance_px > 0.0 and in_active:
+		# 평타 전진: 곡선이 x 이동을 맡고 잔여 x 속도는 더하지 않는다. y 는 기존대로 감속한다.
+		velocity.x = 0.0
 		approach_velocity(Vector2.ZERO)
-	move_by_velocity()
+		move_by_velocity()
+		var stepd := MotionCurve.ease_out_step(atk.advance_px, t - s, a)
+		floor_pos.x += attack_facing * stepd
+		attack_advance_done += stepd
+	else:
+		# 준비·회복: 잔여 속도를 감속
+		approach_velocity(Vector2.ZERO)
+		move_by_velocity()
 	# 연결 규칙
 	if state == &"light":
 		if t >= total - atk.chain_window_ticks():
@@ -389,14 +414,102 @@ func _die() -> void:
 func cooldown_for(sd: SkillData) -> int:
 	return cooldowns.get(sd.id, 0)
 
+# ------------------------------------------------------------------ 그리기
+## 몸 기울기와 검 궤적은 그림에만 적용한다. 발 위치, 그림자, y 정렬, 피격 범위, 높이는 바꾸지 않는다.
+
+func _swing_progress() -> float:
+	## 타격 구간 진행도 0~1 (타격 종료 후에는 1 이상, 잔상용)
+	var s := current_attack.startup_ticks()
+	var a := current_attack.active_ticks()
+	return float(attack_t() - s + 1) / float(maxi(1, a))
+
+func _visual_offset() -> Vector2:
+	if current_attack == null or current_attack.swing_style == AttackData.Swing.LEGACY:
+		return Vector2.ZERO
+	var s := current_attack.startup_ticks()
+	var a := current_attack.active_ticks()
+	var t := attack_t()
+	var f := float(attack_facing)
+	if t < s:
+		# 준비: 짧게 뒤로 당긴다
+		return Vector2(-4.0 * f * float(t + 1) / float(maxi(1, s)), 0.0)
+	if t < s + a:
+		# 타격: 몸이 전방에 실린다
+		var lean := 6.0 if current_attack.swing_style != AttackData.Swing.DIAGONAL_DOWN else 9.0
+		return Vector2(lean * f, 2.0)
+	# 회복: 원래 자세로 돌아온다
+	var r := float(t - s - a) / float(maxi(1, current_attack.recovery_ticks()))
+	return Vector2(6.0 * f * maxf(0.0, 1.0 - r * 3.0), 0.0)
+
 func _draw_body() -> void:
+	var off := _visual_offset()
+	if off != Vector2.ZERO:
+		draw_set_transform(off, 0.0, Vector2.ONE)
 	super()
-	# 검 궤적: 타격 구간 동안 앞쪽에 표시
-	if current_hitbox != null and current_attack != null and attack_phase() == &"active":
-		var top := -height - body_height * 0.5
-		var col := Color(1.0, 0.95, 0.6, 0.85)
-		if current_skill != null:
-			col = Color(1.0, 0.6, 0.2, 0.9)
-		var x0 := current_hitbox.x_min
-		var x1 := current_hitbox.x_max
-		draw_rect(Rect2(x0, top - 12.0, x1 - x0, 24.0), col)
+	if off != Vector2.ZERO:
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	_draw_sword()
+
+func _draw_sword() -> void:
+	if current_attack == null or (state != &"light" and state != &"skill" and state != &"air_attack"):
+		return
+	var style: int = current_attack.swing_style
+	var phase := attack_phase()
+	if style == AttackData.Swing.LEGACY:
+		# M1 표시: 타격 구간 동안 앞쪽 사각형
+		if current_hitbox != null and phase == &"active":
+			var top := -height - body_height * 0.5
+			var col := Color(1.0, 0.95, 0.6, 0.85)
+			if current_skill != null:
+				col = Color(1.0, 0.6, 0.2, 0.9)
+			draw_rect(Rect2(current_hitbox.x_min, top - 12.0, current_hitbox.x_max - current_hitbox.x_min, 24.0), col)
+		return
+	var f := float(attack_facing)
+	var pivot := Vector2(_visual_offset().x, -height - body_height + 22.0)   # 어깨
+	var radius := current_attack.reach_forward - 6.0                          # 실제 판정 폭 안에서 표시
+	var a0 := 0.0
+	var a1 := 0.0
+	match style:
+		AttackData.Swing.HORIZONTAL:
+			a0 = deg_to_rad(-38.0)
+			a1 = deg_to_rad(14.0)
+		AttackData.Swing.HORIZONTAL_REVERSE:
+			a0 = deg_to_rad(14.0)
+			a1 = deg_to_rad(-38.0)
+		AttackData.Swing.DIAGONAL_DOWN:
+			a0 = deg_to_rad(-105.0)
+			a1 = deg_to_rad(32.0)
+			radius = current_attack.reach_forward - 4.0
+	var col := Color(1.0, 0.96, 0.75, 0.9)
+	if phase == &"startup":
+		# 검을 뒤로 모은다
+		var back := pivot + Vector2(-f * 26.0, -10.0)
+		draw_line(pivot, back, Color(0.9, 0.9, 0.95, 0.9), 3.0)
+		return
+	var u := 0.0
+	var alpha := 1.0
+	if phase == &"active":
+		u = clampf(_swing_progress(), 0.0, 1.0)
+	else:
+		var past := attack_t() - current_attack.startup_ticks() - current_attack.active_ticks()
+		if past >= SWING_TRAIL_TICKS:
+			return
+		u = 1.0
+		alpha = 1.0 - float(past + 1) / float(SWING_TRAIL_TICKS + 1)
+	var ang := lerpf(a0, a1, u)
+	# 부채꼴 잔상 (지나간 구간)
+	var pts := PackedVector2Array([pivot])
+	var steps := 10
+	for i in range(steps + 1):
+		var t := float(i) / float(steps)
+		var an := lerpf(a0, ang, t)
+		pts.append(pivot + Vector2(cos(an) * f, sin(an)) * radius)
+	if pts.size() >= 3:
+		var fill := Color(1.0, 0.9, 0.5, 0.28 * alpha)
+		if style == AttackData.Swing.DIAGONAL_DOWN:
+			fill = Color(1.0, 0.75, 0.4, 0.34 * alpha)
+		draw_colored_polygon(pts, fill)
+	# 검 날 (현재 각도)
+	col.a = alpha
+	var tip := pivot + Vector2(cos(ang) * f, sin(ang)) * radius
+	draw_line(pivot, tip, col, 4.0 if style == AttackData.Swing.DIAGONAL_DOWN else 3.0)

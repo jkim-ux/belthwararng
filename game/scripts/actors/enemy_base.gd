@@ -2,12 +2,23 @@ class_name EnemyBase
 extends BattleActor
 ## 적 공통 피격 반응: 경직, 짧은 띄우기(1회), 다운, 기상 보호.
 ## 상태: idle, hitstun, launched, down, getup, dead (+ 하위 클래스 상태)
+## R1: 밀림은 AttackData.knockback_ms 가 양수면 그 기간 동안 감속 곡선(MotionCurve)으로 총 거리를 소모하고,
+## 0 이면 M1 방식(매초 240 px 일정 속도)이다. 경직 시간과 밀림 시간은 분리되며 새 타격이 오면 밀림을 교체한다.
+
+const LEGACY_KNOCKBACK_SPEED := 240.0
 
 var can_be_launched: bool = true
 var knockback_enabled: bool = true
 var launch_dir: int = 1
+var knockback_total: float = 0.0     ## 이번 밀림의 총 거리
+var knockback_ticks: int = 0         ## 곡선 밀림 기간(0 = 일정 속도)
+var knockback_t: int = 0             ## 곡선 밀림 진행 틱
+var required_for_victory: bool = true   ## 캠페인 승리 조건에 세는 적인지(허수아비는 false)
 
 func _on_hit(info: HitInfo) -> void:
+	if info.attack.hitstun_ms <= 0.0 and not info.attack.launch:
+		# 경직 0 인 공격(지원 사격 등): 피해만 적용하고 상태·밀림을 바꾸지 않는다.
+		return
 	end_hitboxes()
 	if info.attack.launch and can_be_launched and not airborne_by_launch and height <= 0.0:
 		# 띄우기: 지상에 있고 아직 띄워지지 않은 대상에게만
@@ -23,17 +34,38 @@ func _on_hit(info: HitInfo) -> void:
 		return
 	if state == &"down" or state == &"getup":
 		return
+	if info.attack.hitstun_ms <= 0.0:
+		return
 	hitstun_ticks = Ticks.from_ms(info.attack.hitstun_ms)
-	knockback_remaining = info.attack.knockback if knockback_enabled else 0.0
-	knockback_dir = info.direction
+	_set_knockback(info)
 	velocity = Vector2.ZERO
 	change_state(&"hitstun")
 
+## 새 타격의 밀림으로 교체한다(합산하지 않음). 같은 틱에 여러 타격이 오면 마지막 적용이 남는다.
+func _set_knockback(info: HitInfo) -> void:
+	knockback_remaining = info.attack.knockback if knockback_enabled else 0.0
+	knockback_total = knockback_remaining
+	knockback_ticks = info.attack.knockback_ticks() if knockback_enabled else 0
+	knockback_t = 0
+	knockback_dir = info.direction
+
+func _step_knockback() -> void:
+	if knockback_remaining <= 0.0:
+		return
+	var stepd := 0.0
+	if knockback_ticks > 0:
+		stepd = MotionCurve.ease_out_step(knockback_total, knockback_t, knockback_ticks)
+		knockback_t += 1
+		stepd = minf(stepd, knockback_remaining)
+	else:
+		stepd = minf(knockback_remaining, LEGACY_KNOCKBACK_SPEED * Ticks.DT)
+	floor_pos.x += stepd * knockback_dir
+	knockback_remaining -= stepd
+	if knockback_ticks > 0 and knockback_t >= knockback_ticks:
+		knockback_remaining = 0.0
+
 func _step_hitstun() -> void:
-	if knockback_remaining > 0.0:
-		var stepd := minf(knockback_remaining, 240.0 * Ticks.DT)
-		floor_pos.x += stepd * knockback_dir
-		knockback_remaining -= stepd
+	_step_knockback()
 	if state_ticks >= hitstun_ticks:
 		change_state(&"idle")
 
@@ -60,6 +92,7 @@ func _step_getup() -> void:
 func _die() -> void:
 	super()
 	velocity = Vector2.ZERO
+	knockback_remaining = 0.0
 
 ## 하위 클래스에서 공통 상태를 처리한 뒤 true 를 돌려주면 나머지는 건너뛴다.
 func _step_common_reactions() -> bool:

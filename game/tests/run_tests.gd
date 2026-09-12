@@ -9,7 +9,7 @@ var _fail := 0
 var _failures: Array[String] = []
 
 func _initialize() -> void:
-	print("=== HWR-001 자동 검증 시작 (Godot %s) ===" % Engine.get_version_info().string)
+	print("=== HWR-001/HWR-002 R1 자동 검증 시작 (Godot %s) ===" % Engine.get_version_info().string)
 	await process_frame
 	var tests := [
 		"test_tick_quantization",
@@ -28,6 +28,15 @@ func _initialize() -> void:
 		"test_death_clears_buffer",
 		"test_enemy_attack_cycle_and_facing_lock",
 		"test_light_combo_kills_enemy_in_one_set",
+		# --- HWR-002 R1 A: 평타 모멘텀
+		"test_r1_advance_totals_both_directions",
+		"test_r1_advance_same_with_hitstop",
+		"test_r1_advance_no_leak_after_wall_or_hit",
+		"test_r1_combo_connects_on_knockback_target",
+		"test_r1_knockback_curve_and_replacement",
+		"test_r1_same_tick_last_hit_wins",
+		"test_r1_legacy_profile_keeps_m1_behaviour",
+		"test_r1_profile_switch_rules",
 	]
 	for t in tests:
 		await _run(t)
@@ -363,3 +372,303 @@ func test_light_combo_kills_enemy_in_one_set(b: Battle) -> void:
 		idle(b, atk.total_ticks() - atk.chain_window_ticks() - 1)
 	idle(b, 30)
 	check(not e.alive, "평타 3연격(20+20+28=68)으로 체력 65 적 처치 (hp %d, alive %s)" % [e.hp, str(e.alive)])
+
+# ------------------------------------------------------------------ HWR-002 R1 A: 평타 모멘텀
+
+## 현재 평타의 연결창 시작 직전 틱까지 진행한다. 이어서 press 하면 그 틱(연결창 첫 틱)에 소비된다.
+func advance_to_chain(b: Battle) -> void:
+	var p := b.player
+	var atk := p.current_attack
+	var target_t := atk.total_ticks() - atk.chain_window_ticks() - 1
+	while p.attack_t() < target_t and (p.state == &"light" or p.state == &"skill"):
+		idle(b, 1)
+
+func face_left(b: Battle) -> void:
+	hold(b, Vector2(-1, 0), 1)
+	hold(b, Vector2.ZERO, 4)
+
+func test_r1_advance_totals_both_directions(b: Battle) -> void:
+	var p := b.player
+	check(b.current_profile().id == &"r1_momentum", "수련장 기본 프로필은 새 모멘텀 (%s)" % b.current_profile().id)
+	var expected := [12.0, 18.0, 30.0]
+	for dir_name in ["오른쪽", "왼쪽"]:
+		# 허수아비(700)에 닿지 않는 위치에서 단독 평타
+		place(p, 300 if dir_name == "오른쪽" else 600, 540)
+		p.velocity = Vector2.ZERO
+		if dir_name == "왼쪽":
+			face_left(b)
+		var sign := float(p.facing)
+		var x0 := p.floor_pos.x
+		var deltas: Array[float] = []
+		for i in 3:
+			var start_x := p.floor_pos.x
+			press(b, "attack_light")
+			var atk := p.current_attack
+			var s := atk.startup_ticks()
+			var a := atk.active_ticks()
+			idle(b, s - 1)
+			check(absf(p.floor_pos.x - start_x) < 0.001, "%s %d타: 준비 구간 동안 전진 없음 (%.2f)" % [dir_name, i + 1, p.floor_pos.x - start_x])
+			var first := 0.0
+			var last := 0.0
+			for k in a:
+				var before := p.floor_pos.x
+				idle(b, 1)
+				var d := absf(p.floor_pos.x - before)
+				if k == 0:
+					first = d
+				last = d
+			check(first > last, "%s %d타: 이른 틱 전진(%.2f)이 마지막 틱(%.2f)보다 큼" % [dir_name, i + 1, first, last])
+			var after_active := p.floor_pos.x
+			advance_to_chain(b)
+			check(absf(p.floor_pos.x - after_active) < 0.001, "%s %d타: 회복 구간 전진 없음 (%.2f)" % [dir_name, i + 1, p.floor_pos.x - after_active])
+			deltas.append((p.floor_pos.x - start_x) * sign)
+		for i in 3:
+			check(absf(deltas[i] - expected[i]) < 0.01, "%s %d타 전진 합 %.2f == %.0f" % [dir_name, i + 1, deltas[i], expected[i]])
+		idle(b, 30)
+		check(p.state == &"ground" and p.velocity.length() < 0.001, "%s: 3연타 뒤 지상 정지 (속도 %.2f)" % [dir_name, p.velocity.length()])
+		check(absf((p.floor_pos.x - x0) * sign - 60.0) < 0.01, "%s: 3연타 총 전진 %.2f == 60" % [dir_name, (p.floor_pos.x - x0) * sign])
+
+func test_r1_advance_same_with_hitstop(b: Battle) -> void:
+	var p := b.player
+	var d := b.dummy
+	place(p, 300, 540)
+	place(d, 370, 540)
+	var x0 := p.floor_pos.x
+	press(b, "attack_light")
+	var atk := p.current_attack
+	idle(b, atk.startup_ticks())   # 타격 첫 틱: 적중 → 타격 정지 2틱
+	check(p.hitstop_ticks == 2 and d.total_damage_taken == 20, "타격 첫 틱 적중, 타격 정지 %d틱" % p.hitstop_ticks)
+	var frozen_x := p.floor_pos.x
+	idle(b, 2)
+	check(absf(p.floor_pos.x - frozen_x) < 0.001, "타격 정지 중 전진 멈춤")
+	idle(b, atk.total_ticks())
+	check(absf(p.floor_pos.x - x0 - 12.0) < 0.01, "타격 정지가 있어도 1타 전진 합 %.2f == 12" % (p.floor_pos.x - x0))
+
+func test_r1_advance_no_leak_after_wall_or_hit(b: Battle) -> void:
+	var p := b.player
+	# 1) 경계: 오른쪽 벽에 붙어 3연타 → 위치 고정, 이후 회피 거리가 평소와 같다
+	var r := b.arena_rect()
+	var wall_x := r.end.x - p.half_width
+	place(p, wall_x, 540)
+	for i in 3:
+		press(b, "attack_light")
+		advance_to_chain(b)
+	idle(b, 30)
+	check(absf(p.floor_pos.x - wall_x) < 0.001, "벽에서 평타 전진은 잘려 나가고 누적되지 않음 (x %.1f)" % p.floor_pos.x)
+	# 벽에서 왼쪽으로 회피: 평소 회피 거리와 비교
+	face_left(b)
+	var before := p.floor_pos.x
+	press(b, "dodge")
+	idle(b, 12)
+	var wall_dodge := before - p.floor_pos.x
+	place(p, 600, 540)
+	p.dodge_cooldown_ticks = 0
+	face_left(b)
+	before = p.floor_pos.x
+	press(b, "dodge")
+	idle(b, 12)
+	var normal_dodge := before - p.floor_pos.x
+	check(absf(wall_dodge - normal_dodge) < 0.01 and absf(normal_dodge - 210.0) < 0.5, "벽에서 잘린 전진이 회피에 더해지지 않음 (%.1f vs %.1f)" % [wall_dodge, normal_dodge])
+	# 2) 타격 구간에 피격으로 공격이 끊기면 남은 전진을 버린다
+	idle(b, 60)
+	place(p, 300, 540)
+	p.facing = 1
+	var e := b.spawn_melee_enemy(Vector2(1100, 540))
+	e.change_state(&"idle")
+	e.invuln_ticks = 200       # 주인공의 평타가 먼저 닿아 적 공격이 끊기지 않게 한다
+	press(b, "attack_light")   # 3타는 전진 30, 타격 5틱
+	var atk3: AttackData = p.light_attacks[2]
+	advance_to_chain(b)
+	press(b, "attack_light")
+	advance_to_chain(b)
+	press(b, "attack_light")
+	check(p.light_index == 3, "3타 시작")
+	idle(b, atk3.startup_ticks() + 1)   # 타격 2틱째
+	var x_before_hit := p.floor_pos.x
+	place(e, p.floor_pos.x + 60, 540)
+	e.facing = -1
+	e.change_state(&"attack")
+	idle(b, 1)
+	check(p.state == &"hitstun", "타격 구간에 피격 (%s)" % p.state)
+	var kb: float = e.attack_data.knockback
+	idle(b, 40)
+	check(p.state == &"ground", "경직 종료 후 지상")
+	var moved := p.floor_pos.x - x_before_hit
+	check(moved <= kb + 0.01, "취소된 3타의 남은 전진이 새지 않음 (이동 %.1f ≤ 밀림 %.0f)" % [moved, kb])
+	var rest_x := p.floor_pos.x
+	idle(b, 10)
+	check(absf(p.floor_pos.x - rest_x) < 0.001, "이후 정지 상태에서 이동 없음")
+
+func _run_combo_on(b: Battle, e: EnemyBase, label: String, expected_damage: int) -> void:
+	var p := b.player
+	e.total_damage_taken = 0
+	for i in 3:
+		press(b, "attack_light")
+		advance_to_chain(b)
+	idle(b, 30)
+	check(e.total_damage_taken == expected_damage, "%s: 3연타 피해 %d == %d" % [label, e.total_damage_taken, expected_damage])
+
+func test_r1_combo_connects_on_knockback_target(b: Battle) -> void:
+	var p := b.player
+	# 체력이 큰 밀리는 검증용 표적(근접 적, 대기 상태)
+	for dist in [70.0, 80.0, 90.0]:
+		var e := b.spawn_melee_enemy(Vector2(300 + dist, 540))
+		e.max_hp = 100000
+		e.hp = e.max_hp
+		e.change_state(&"idle")
+		place(p, 300, 540)
+		p.facing = 1
+		_run_combo_on(b, e, "오른쪽 %.0fpx" % dist, 68)
+		e.queue_free()
+		b.enemies.erase(e)
+	# 왼쪽 바라보기
+	for dist in [70.0, 80.0, 90.0]:
+		var e := b.spawn_melee_enemy(Vector2(900 - dist, 540))
+		e.max_hp = 100000
+		e.hp = e.max_hp
+		e.change_state(&"idle")
+		place(p, 900, 540)
+		face_left(b)
+		e.change_state(&"idle")
+		_run_combo_on(b, e, "왼쪽 %.0fpx" % dist, 68)
+		e.queue_free()
+		b.enemies.erase(e)
+	# 적을 벽에 붙인 경우: 밀리지 못해도 3타 모두 닿는다
+	var wall := b.arena_rect().end.x - 20.0
+	var ew := b.spawn_melee_enemy(Vector2(wall, 540))
+	ew.max_hp = 100000
+	ew.hp = ew.max_hp
+	ew.change_state(&"idle")
+	place(p, wall - 80.0, 540)
+	p.facing = 1
+	_run_combo_on(b, ew, "벽에 붙은 적", 68)
+	check(absf(ew.floor_pos.x - wall) < 0.001, "벽에 붙은 적은 밀리지 않음 (x %.1f)" % ew.floor_pos.x)
+	ew.queue_free()
+	b.enemies.erase(ew)
+	# 헛치기 후 연결: 1타는 빗나가고 2·3타만 닿는다
+	idle(b, 30)
+	var ef := b.spawn_melee_enemy(Vector2(700, 540))
+	ef.max_hp = 100000
+	ef.hp = ef.max_hp
+	ef.change_state(&"idle")
+	place(p, 300, 540)
+	p.facing = 1
+	press(b, "attack_light")
+	advance_to_chain(b)
+	check(ef.total_damage_taken == 0 and p.hitstop_ticks == 0, "헛치기: 피해·타격 정지 없음")
+	place(ef, p.floor_pos.x + 75.0, 540)
+	press(b, "attack_light")
+	check(p.light_index == 2, "헛친 뒤에도 2타 연결")
+	advance_to_chain(b)
+	press(b, "attack_light")
+	idle(b, 40)
+	check(ef.total_damage_taken == 48, "헛치기 후 2·3타 적중 피해 %d == 48" % ef.total_damage_taken)
+
+func test_r1_knockback_curve_and_replacement(b: Battle) -> void:
+	var p := b.player
+	var kd := b.knockback_dummy
+	check(kd != null and kd.knockback_enabled and b.dummy != null and not b.dummy.knockback_enabled, "고정 허수아비와 밀림 표적이 따로 있음")
+	place(p, 300, 540)
+	place(kd, 370, 540)
+	var x0 := kd.floor_pos.x
+	press(b, "attack_light")
+	idle(b, p.light_attacks[0].startup_ticks())   # 적중 틱
+	check(kd.state == &"hitstun" and kd.knockback_total == 12.0 and kd.knockback_ticks == 6, "1타 밀림 12px / 6틱(100ms) 설정 (%.0f, %d)" % [kd.knockback_total, kd.knockback_ticks])
+	# 타격 정지 2틱 동안 밀림 진행 없음
+	idle(b, 2)
+	check(absf(kd.floor_pos.x - x0) < 0.001, "타격 정지 중 밀림 없음")
+	var steps: Array[float] = []
+	for k in 6:
+		var before := kd.floor_pos.x
+		idle(b, 1)
+		steps.append(kd.floor_pos.x - before)
+	check(absf(kd.floor_pos.x - x0 - 12.0) < 0.01, "6틱 뒤 밀림 합 %.2f == 12" % (kd.floor_pos.x - x0))
+	check(steps[0] > steps[5] and steps[0] > 3.0, "밀림 첫 틱 %.2f > 마지막 틱 %.2f (감속)" % [steps[0], steps[5]])
+	check(kd.state == &"hitstun" and kd.knockback_remaining == 0.0, "밀림이 끝나도 경직은 유지 (%s, %d/%d틱)" % [kd.state, kd.state_ticks, kd.hitstun_ticks])
+	var x_after := kd.floor_pos.x
+	idle(b, 12)
+	check(kd.state == &"idle" and absf(kd.floor_pos.x - x_after) < 0.001, "경직 종료 후 추가 이동 없음 (%s)" % kd.state)
+	# 교체: 1타 밀림 진행 중 2타가 들어오면 2타 값(18/7틱)으로 바뀌고 합산되지 않는다
+	idle(b, 20)
+	place(p, 300, 540)
+	place(kd, 370, 540)
+	x0 = kd.floor_pos.x
+	press(b, "attack_light")
+	advance_to_chain(b)
+	press(b, "attack_light")
+	idle(b, p.light_attacks[1].startup_ticks())
+	check(kd.knockback_total == 18.0 and kd.knockback_ticks == 7 and kd.knockback_t == 0, "2타 적중 시 밀림 교체 18px/7틱 (%.0f, %d)" % [kd.knockback_total, kd.knockback_ticks])
+	idle(b, 30)
+	check(absf(kd.floor_pos.x - x0 - 30.0) < 0.01, "1타 12 + 2타 18 = 총 %.2f == 30 (합산 아님, 순차 교체)" % (kd.floor_pos.x - x0))
+	# 3타는 65px / 11틱
+	idle(b, 10)
+	place(p, kd.floor_pos.x - 75.0, 540)
+	x0 = kd.floor_pos.x
+	press(b, "attack_light")
+	advance_to_chain(b)
+	press(b, "attack_light")
+	advance_to_chain(b)
+	press(b, "attack_light")
+	idle(b, p.light_attacks[2].startup_ticks())
+	check(kd.knockback_total == 65.0 and kd.knockback_ticks == 11, "3타 밀림 65px/11틱(180ms) (%.0f, %d)" % [kd.knockback_total, kd.knockback_ticks])
+
+func test_r1_same_tick_last_hit_wins(b: Battle) -> void:
+	var kd := b.knockback_dummy
+	place(kd, 600, 540)
+	var i1 := HitInfo.new()
+	i1.attack = b.player.light_attacks[0]
+	i1.damage = 20
+	i1.hitstop_ticks = 2
+	i1.direction = 1
+	var i2 := HitInfo.new()
+	i2.attack = b.player.light_attacks[2]
+	i2.damage = 28
+	i2.hitstop_ticks = 4
+	i2.direction = -1
+	kd.receive_hit(i1)
+	kd.receive_hit(i2)
+	check(kd.total_damage_taken == 48, "같은 틱 두 타격의 피해는 각각 적용 (%d)" % kd.total_damage_taken)
+	check(kd.knockback_total == 65.0 and kd.knockback_dir == -1 and kd.hitstun_ticks == Ticks.from_ms(420), "밀림·경직은 마지막 적용 타격 값 (%.0f, 방향 %d)" % [kd.knockback_total, kd.knockback_dir])
+	check(kd.hitstop_ticks == 4, "타격 정지는 최댓값 (%d)" % kd.hitstop_ticks)
+
+func test_r1_legacy_profile_keeps_m1_behaviour(b: Battle) -> void:
+	var p := b.player
+	check(b.set_profile(0), "기존 M1 프로필로 전환")
+	check(p.light_attacks[0].advance_px == 0.0 and p.light_attacks[0].knockback == 30.0 and p.light_attacks[0].knockback_ms == 0.0, "기존 프로필: 전진 0, 밀림 30, 일정 속도")
+	place(p, 300, 540)
+	var x0 := p.floor_pos.x
+	for i in 3:
+		press(b, "attack_light")
+		advance_to_chain(b)
+	idle(b, 30)
+	check(absf(p.floor_pos.x - x0) < 0.001, "기존 프로필 3연타 전진 0 (%.2f)" % (p.floor_pos.x - x0))
+	# 일정 속도 밀림: 30px 를 매초 240px → 8틱(7틱 4px + 2px)
+	var kd := b.knockback_dummy
+	place(p, 300, 540)
+	place(kd, 370, 540)
+	var kx := kd.floor_pos.x
+	press(b, "attack_light")
+	idle(b, p.light_attacks[0].startup_ticks() + 2)   # 적중 + 타격 정지
+	idle(b, 1)
+	check(absf(kd.floor_pos.x - kx - 4.0) < 0.01, "기존 밀림 첫 틱 4px (%.2f)" % (kd.floor_pos.x - kx))
+	idle(b, 7)
+	check(absf(kd.floor_pos.x - kx - 30.0) < 0.01 and kd.knockback_remaining == 0.0, "기존 밀림 8틱 뒤 30px (%.2f)" % (kd.floor_pos.x - kx))
+
+func test_r1_profile_switch_rules(b: Battle) -> void:
+	var p := b.player
+	var legacy: CombatProfile = b.profiles[0]
+	var r1: CombatProfile = b.profiles[1]
+	place(p, 300, 540)
+	press(b, "attack_light")
+	check(not b.set_profile(0) and b.profile_index == 1, "공격 중에는 프로필 전환 거부")
+	idle(b, 30)
+	check(b.set_profile(0) and p.profile_id == &"m1_legacy", "행동 종료 후 전환 허용")
+	check(b.toggle_profile() and p.profile_id == &"r1_momentum", "F2 토글로 새 모멘텀 복귀")
+	# 공유 Resource 가 수정되지 않았다
+	check(legacy.light_attacks[0].advance_px == 0.0 and legacy.light_attacks[2].knockback == 70.0, "기존 프로필 리소스 값 보존")
+	check(r1.light_attacks[0].advance_px == 12.0 and r1.light_attacks[2].knockback == 65.0 and r1.light_attacks[2].knockback_ms == 180.0, "새 프로필 리소스 값 보존")
+	check(legacy.light_attacks[0] != r1.light_attacks[0], "두 프로필은 서로 다른 리소스를 참조")
+	# 캠페인 모드에서는 전환 불가
+	b.mode = &"campaign"
+	check(not b.set_profile(0) and p.profile_id == &"r1_momentum", "캠페인 모드에서는 프로필 전환 불가")
+	b.mode = &"training"

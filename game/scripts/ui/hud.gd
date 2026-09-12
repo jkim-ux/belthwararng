@@ -12,6 +12,11 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	queue_redraw()
 
+func _zone_text() -> String:
+	if battle.mode == &"training":
+		return "구역: 수련장 (프로필 비교)"
+	return "구역: 거점 전투"
+
 func _draw() -> void:
 	if battle == null or battle.player == null:
 		return
@@ -21,18 +26,23 @@ func _draw() -> void:
 	draw_rect(Rect2(20, 16, 340, 26), Color(0, 0, 0, 0.55))
 	var ratio := float(p.hp) / float(maxi(1, p.max_hp))
 	draw_rect(Rect2(23, 19, 334 * ratio, 20), Color(0.35, 0.85, 0.4) if ratio > 0.3 else Color(0.9, 0.3, 0.3))
-	draw_string(f, Vector2(28, 36), "화랑  %d / %d" % [p.hp, p.max_hp], HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
-	draw_string(f, Vector2(380, 36), "구역: 실험장 (M1 전투 감각)", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 1, 1, 0.9))
+	draw_string(f, Vector2(28, 36), "%s  %d / %d" % [p.display_name, p.hp, p.max_hp], HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color.WHITE)
+	draw_string(f, Vector2(380, 36), _zone_text(), HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 1, 1, 0.9))
 	if not p.alive:
-		draw_string(f, Vector2(480, 200), "쓰러졌다 — F6 으로 초기화", HORIZONTAL_ALIGNMENT_LEFT, -1, 30, Color(1, 0.5, 0.5))
+		draw_string(f, Vector2(480, 200), "쓰러졌다 — F6 으로 초기화" if battle.mode == &"training" else "쓰러졌다", HORIZONTAL_ALIGNMENT_LEFT, -1, 30, Color(1, 0.5, 0.5))
 	if battle.paused:
 		draw_string(f, Vector2(560, 300), "일시정지 (Esc)", HORIZONTAL_ALIGNMENT_LEFT, -1, 30, Color(1, 1, 1))
 	# --- 우상단: 조작 안내
 	var help := [
 		"방향키 이동   X 평타   C 점프(공중 평타 1회)   Space 회피",
-		"A 비연참   S 승월참   (D F Q W E R 미구현)",
-		"F1 개발 표시   F5 적 재생성   F6 화랑 초기화   F12 스크린샷   Esc 일시정지",
+		"A 돌진베기   S 올려베기   (D F Q W E R 미구현)",
 	]
+	if battle.mode == &"training":
+		help.append("F1 개발 표시   F2 프로필 전환   F5 적 재생성   F6 초기화   F12 스크린샷   Esc 일시정지")
+		var prof := battle.current_profile()
+		help.append("프로필: %s — %s" % [prof.display_name, prof.description])
+		if battle.profile_switch_message != "":
+			help.append("(%s)" % battle.profile_switch_message)
 	var y := 66.0
 	for line in help:
 		draw_string(f, Vector2(20, y), line, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color(1, 1, 1, 0.75))
@@ -40,6 +50,8 @@ func _draw() -> void:
 	# --- 허수아비 누적 피해
 	if battle.dummy != null and is_instance_valid(battle.dummy):
 		draw_string(f, Vector2(900, 36), "허수아비 누적 피해: %d" % battle.dummy.total_damage_taken, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(1, 0.9, 0.6))
+	if battle.knockback_dummy != null and is_instance_valid(battle.knockback_dummy):
+		draw_string(f, Vector2(900, 56), "밀림 표적 누적 피해: %d" % battle.knockback_dummy.total_damage_taken, HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color(0.85, 0.95, 0.7))
 	# --- 하단: 스킬 8칸
 	var slot_w := 118.0
 	var slot_h := 64.0

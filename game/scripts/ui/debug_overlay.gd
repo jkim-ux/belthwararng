@@ -54,10 +54,14 @@ func _draw_actor(a: BattleActor, f: Font) -> void:
 		lines.append("타격 정지 %d틱" % a.hitstop_ticks)
 	if a.invuln_ticks > 0:
 		lines.append("무적 %d틱" % a.invuln_ticks)
+	if a is EnemyBase and a.knockback_remaining > 0.0:
+		lines.append("밀림 잔여 %.1f / %.0f px (%d/%d틱)" % [a.knockback_remaining, a.knockback_total, a.knockback_t, a.knockback_ticks])
 	if a is Player:
 		var p := a as Player
 		if p.current_attack != null:
 			lines.append("%s %s t=%d/%d" % [p.current_attack.display_name, p.attack_phase(), p.attack_t(), p.current_attack.total_ticks()])
+			if p.current_attack.advance_px > 0.0:
+				lines.append("전진 %.1f / %.0f px" % [p.attack_advance_done, p.current_attack.advance_px])
 		if p.buffered_action != &"":
 			lines.append("보관 입력 %s (%d/%d틱)" % [p.buffered_action, p.buffer_age, p.buffer_ticks()])
 		lines.append("속도 (%.0f, %.0f)  방향 %d" % [p.velocity.x, p.velocity.y, p.facing])
@@ -78,13 +82,14 @@ func _draw_panel(f: Font) -> void:
 	lines.append(Ticks.describe("회피 이동", t.dodge_ms))
 	lines.append(Ticks.describe("회피 무적", t.dodge_invuln_ms))
 	lines.append(Ticks.describe("회피 재사용", t.dodge_cooldown_ms))
+	lines.append("프로필 %s" % p.profile_id)
 	for atk in p.light_attacks:
-		lines.append("%s: 준비 %d 타격 %d 회복 %d 연결창 %d틱" % [atk.display_name, atk.startup_ticks(), atk.active_ticks(), atk.recovery_ticks(), atk.chain_window_ticks()])
+		lines.append("%s: 준비 %d 타격 %d 회복 %d 연결창 %d틱 전진 %.0f 밀림 %.0f/%d틱" % [atk.display_name, atk.startup_ticks(), atk.active_ticks(), atk.recovery_ticks(), atk.chain_window_ticks(), atk.advance_px, atk.knockback, atk.knockback_ticks()])
 	for sd in p.skill_set.skills:
 		if sd.implemented and sd.attack != null:
 			var atk: AttackData = sd.attack
 			lines.append("%s: 준비 %d 타격 %d 회복 %d 이동취소 %d틱 재사용 %d틱" % [sd.display_name, atk.startup_ticks(), atk.active_ticks(), atk.recovery_ticks(), atk.move_cancel_ticks(), sd.cooldown_ticks()])
-	lines.append("--- 화랑 ---")
+	lines.append("--- %s ---" % p.display_name)
 	lines.append("상태 %s  최근 %s" % [p.state, p.last_event])
 	for sd in p.skill_set.skills:
 		if sd.implemented:

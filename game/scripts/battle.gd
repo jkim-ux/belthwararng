@@ -1,12 +1,14 @@
 class_name Battle
 extends Node2D
-## 전투 장면 컨트롤러. 개체 생성, 고정 틱 진행 순서, 적중 판정(CombatResolver 역할), 개발용 동작을 맡는다.
-## 틱 순서: 플레이어 입력 수집·진행 → 적 진행 → 적중 처리.
+## 전투 장면 컨트롤러. 개체 생성, 고정 틱 진행 순서, 적중 판정, 개발용 동작을 맡는다.
+## 틱 순서: 플레이어 입력 수집·진행 → 아군 진행 → 적 진행 → 적중 처리.
+## mode: "training" (수련장: 허수아비·프로필 비교·F5/F6 허용) / "campaign" (거점 전투: 웨이브·승패, 개발 키 없음)
 
 const TUNING_PATH := "res://data/combat_tuning.tres"
 const SKILLS_PATH := "res://data/hwarang_skills.tres"
-const LIGHT_PATHS := ["res://data/attacks/light1.tres", "res://data/attacks/light2.tres", "res://data/attacks/light3.tres"]
 const AIR_PATH := "res://data/attacks/air_light.tres"
+const PROFILE_LEGACY_PATH := "res://data/profiles/m1_legacy.tres"
+const PROFILE_R1_PATH := "res://data/profiles/r1_momentum.tres"
 
 signal hit_applied(attacker: BattleActor, target: BattleActor, info: HitInfo)
 
@@ -15,19 +17,26 @@ signal hit_applied(attacker: BattleActor, target: BattleActor, info: HitInfo)
 @export var debug_visible: bool = true
 @export var spawn_dummy: bool = true
 @export var spawn_enemy: bool = true
+@export var spawn_knockback_dummy: bool = true
 
+var mode: StringName = &"training"
 var arena: Arena
 var actors_root: Node2D
 var fx_root: Node2D
 var player: Player
 var dummy: Dummy
+var knockback_dummy: Dummy
 var enemies: Array[EnemyBase] = []
+var allies: Array[BattleActor] = []          ## 주인공 외 아군(동료). 판정에는 포함되고 승리 조건에는 세지 않는다.
 var tick: int = 0
 var paused: bool = false
 var hud: Node
 var debug_overlay: Node
 var event_log: Array[String] = []
 var hits_this_run: int = 0
+var profiles: Array[CombatProfile] = []
+var profile_index: int = 1                   ## 기본은 새 모멘텀 R1
+var profile_switch_message: String = ""
 
 # 개발용 자동 시연/스크린샷
 var _screenshot_path: String = ""
@@ -36,11 +45,13 @@ var _frames: int = 0
 
 const PLAYER_START := Vector2(300, 540)
 const DUMMY_START := Vector2(700, 540)
-const ENEMY_START := Vector2(1000, 600)
+const KNOCKBACK_DUMMY_START := Vector2(900, 520)
+const ENEMY_START := Vector2(1000, 620)
 
 func _ready() -> void:
 	if tuning == null:
 		tuning = load(TUNING_PATH)
+	profiles = [load(PROFILE_LEGACY_PATH), load(PROFILE_R1_PATH)]
 	arena = Arena.new()
 	arena.name = "Arena"
 	arena.z_index = -10
@@ -54,7 +65,8 @@ func _ready() -> void:
 	fx_root.z_index = 50
 	add_child(fx_root)
 	_spawn_player()
-	respawn_enemies()
+	if mode == &"training":
+		respawn_enemies()
 	hud = get_node_or_null("HUDLayer/HUD")
 	debug_overlay = get_node_or_null("DebugOverlay")
 	if debug_overlay != null:
@@ -64,19 +76,37 @@ func _ready() -> void:
 func arena_rect() -> Rect2:
 	return arena.rect
 
+func current_profile() -> CombatProfile:
+	return profiles[profile_index]
+
 func _spawn_player() -> void:
-	var lights: Array[AttackData] = []
-	for p in LIGHT_PATHS:
-		lights.append(load(p))
 	var air: AttackData = load(AIR_PATH)
 	var skills: SkillSet = load(SKILLS_PATH)
 	player = Player.new()
 	player.name = "Player"
 	actors_root.add_child(player)
-	player.configure(tuning, self, PLAYER_START, lights, air, skills)
+	player.configure(tuning, self, PLAYER_START, current_profile().light_attacks, air, skills)
+	player.apply_profile(current_profile())
 	player.hit_taken.connect(_on_actor_hit)
 
-## 개발용: 허수아비와 적을 다시 생성한다 (F5).
+## 수련장 전용: 프로필 전환. 행동이 끝난 상태(지상 대기·사망)에서만 적용된다.
+func set_profile(index: int) -> bool:
+	if mode != &"training":
+		return false
+	index = clampi(index, 0, profiles.size() - 1)
+	if player.state != &"ground" and player.state != &"dead":
+		profile_switch_message = "행동이 끝난 뒤 전환됩니다"
+		return false
+	profile_index = index
+	player.apply_profile(current_profile())
+	profile_switch_message = ""
+	log_event("프로필: %s" % current_profile().display_name)
+	return true
+
+func toggle_profile() -> bool:
+	return set_profile((profile_index + 1) % profiles.size())
+
+## 수련장 전용: 허수아비와 적을 다시 생성한다 (F5).
 func respawn_enemies() -> void:
 	for e in enemies:
 		if is_instance_valid(e):
@@ -84,19 +114,24 @@ func respawn_enemies() -> void:
 	enemies.clear()
 	if is_instance_valid(dummy):
 		dummy.queue_free()
-		dummy = null
+	dummy = null
+	if is_instance_valid(knockback_dummy):
+		knockback_dummy.queue_free()
+	knockback_dummy = null
 	if spawn_dummy:
 		dummy = Dummy.new()
 		dummy.name = "Dummy"
 		actors_root.add_child(dummy)
 		dummy.configure(tuning, self, DUMMY_START)
 		enemies.append(dummy)
+	if spawn_knockback_dummy:
+		knockback_dummy = Dummy.new()
+		knockback_dummy.name = "KnockbackDummy"
+		actors_root.add_child(knockback_dummy)
+		knockback_dummy.configure(tuning, self, KNOCKBACK_DUMMY_START, true)
+		enemies.append(knockback_dummy)
 	if spawn_enemy:
-		var e := MeleeEnemy.new()
-		e.name = "MeleeEnemy"
-		actors_root.add_child(e)
-		e.configure(tuning, self, ENEMY_START, player)
-		enemies.append(e)
+		spawn_melee_enemy(ENEMY_START)
 	log_event("적 재생성")
 
 func spawn_melee_enemy(at: Vector2) -> MeleeEnemy:
@@ -106,10 +141,10 @@ func spawn_melee_enemy(at: Vector2) -> MeleeEnemy:
 	enemies.append(e)
 	return e
 
-## 개발용: 플레이어 위치·체력 초기화 (F6).
+## 수련장 전용: 플레이어 위치·체력 초기화 (F6).
 func reset_player() -> void:
 	player.reset_to(PLAYER_START)
-	log_event("플레이어 초기화")
+	log_event("초기화")
 
 func _physics_process(_delta: float) -> void:
 	if manual_step:
@@ -125,41 +160,73 @@ func _physics_process(_delta: float) -> void:
 	step(inp)
 
 func _handle_dev_input() -> void:
-	if Input.is_action_just_pressed(&"dev_toggle_debug") and debug_overlay != null:
-		debug_overlay.visible = not debug_overlay.visible
-	if Input.is_action_just_pressed(&"dev_respawn_enemies"):
-		respawn_enemies()
-	if Input.is_action_just_pressed(&"dev_reset_player"):
-		reset_player()
 	if Input.is_action_just_pressed(&"pause"):
 		paused = not paused
 	if Input.is_action_just_pressed(&"dev_screenshot"):
 		_save_screenshot("user://screenshot_%d.png" % Time.get_ticks_msec())
+	if Input.is_action_just_pressed(&"dev_toggle_debug") and debug_overlay != null:
+		debug_overlay.visible = not debug_overlay.visible
+	if mode != &"training":
+		return
+	if Input.is_action_just_pressed(&"dev_toggle_profile"):
+		toggle_profile()
+	if Input.is_action_just_pressed(&"dev_respawn_enemies"):
+		respawn_enemies()
+	if Input.is_action_just_pressed(&"dev_reset_player"):
+		reset_player()
 
 ## 한 틱 진행. 테스트는 이 함수를 직접 호출한다.
 func step(inp: PlayerInput) -> void:
 	tick += 1
 	player.step_with_input(inp)
+	for a in allies:
+		if is_instance_valid(a):
+			a.step()
 	for e in enemies:
 		if is_instance_valid(e):
 			e.step()
 	_resolve_hits()
+	_after_tick()
+
+## 하위 장면(캠페인)이 웨이브·승패 처리를 덧붙인다.
+func _after_tick() -> void:
+	pass
 
 func all_actors() -> Array[BattleActor]:
 	var out: Array[BattleActor] = [player]
+	for a in allies:
+		if is_instance_valid(a):
+			out.append(a)
 	for e in enemies:
 		if is_instance_valid(e):
 			out.append(e)
 	return out
 
+## 살아 있는 아군(주인공 포함). 적의 대상 선택에 쓴다.
+func alive_allies() -> Array[BattleActor]:
+	var out: Array[BattleActor] = []
+	if player.alive:
+		out.append(player)
+	for a in allies:
+		if is_instance_valid(a) and a.alive:
+			out.append(a)
+	return out
+
+func alive_enemies() -> Array[EnemyBase]:
+	var out: Array[EnemyBase] = []
+	for e in enemies:
+		if is_instance_valid(e) and e.alive:
+			out.append(e)
+	return out
+
 ## 적중 판정: 좌우 거리, 깊이 차이, 높이 범위를 모두 확인한다.
-## 같은 공격 인스턴스와 대상 조합에는 한 번만 피해를 준다.
+## 같은 공격 인스턴스와 대상 조합에는 한 번만 피해를 준다. 같은 팀끼리는 피해가 없다.
 func _resolve_hits() -> void:
 	var actors := all_actors()
 	for attacker in actors:
 		if attacker.active_hitboxes.is_empty() or not attacker.alive:
 			continue
-		for hb in attacker.active_hitboxes:
+		for hb in attacker.active_hitboxes.duplicate():
 			for target in actors:
 				if target == attacker or target.team == attacker.team:
 					continue
@@ -181,6 +248,7 @@ func _resolve_hits() -> void:
 					hits_this_run += 1
 					hit_applied.emit(attacker, target, info)
 					_spawn_damage_number(target, info)
+					_spawn_hit_flash(target, info)
 					log_event("%s → %s %d" % [attacker.display_name, target.display_name, roundi(info.damage)])
 
 static func _ranges_overlap(a: Vector2, b: Vector2) -> bool:
@@ -207,9 +275,20 @@ func _spawn_damage_number(target: BattleActor, info: HitInfo) -> void:
 	dn.position = target.floor_pos + Vector2(randf_range(-10, 10), -target.height - target.body_height - 10)
 	fx_root.add_child(dn)
 
+func _spawn_hit_flash(target: BattleActor, info: HitInfo) -> void:
+	if fx_root == null:
+		return
+	var fl := HitFlash.new()
+	fl.strong = info.attack.strong
+	if info.hitstop_ticks <= 0:
+		fl.life = 0.1
+		fl.color = Color(0.85, 0.95, 1.0)
+	fl.position = target.floor_pos + Vector2(0, -target.height - target.body_height * 0.55)
+	fx_root.add_child(fl)
+
 func _on_actor_hit(actor: BattleActor, _info: HitInfo) -> void:
 	if actor == player and not player.alive:
-		log_event("화랑 쓰러짐 (F6 초기화)")
+		log_event("쓰러짐" + (" (F6 초기화)" if mode == &"training" else ""))
 
 func log_event(s: String) -> void:
 	event_log.append("[%d] %s" % [tick, s])
@@ -234,9 +313,7 @@ func _build_demo_script() -> Array:
 		[1, Vector2.ZERO, ["attack_light"]],
 		[12, Vector2.ZERO, []],
 		[1, Vector2.ZERO, ["attack_light"]],
-		[24, Vector2.ZERO, []],
-		[1, Vector2.ZERO, ["skill_s"]],
-		[7, Vector2.ZERO, []],
+		[8, Vector2.ZERO, []],
 	]
 
 func _next_demo_input() -> PlayerInput:
