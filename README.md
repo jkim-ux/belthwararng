@@ -8,7 +8,9 @@
 
 | 파일 | 역할 |
 | --- | --- |
-| [TO_CLAUDE.md](TO_CLAUDE.md) | 현재 지시의 고정 진입점 |
+| [TO_CLAUDE.md](TO_CLAUDE.md) | 게임 구현 지시의 고정 진입점 |
+| [TO_CLAUDE_STORY.md](TO_CLAUDE_STORY.md) | 스토리 집필 HWR-STORY-001 |
+| [docs/story/STORY_BRIEF.md](docs/story/STORY_BRIEF.md) | 짧은 스토리 개요와 5챕터 뼈대 |
 | [docs/GAME_DESIGN.md](docs/GAME_DESIGN.md) | 세계·5챕터·전체 범위 |
 | [docs/COMBAT_FEEL.md](docs/COMBAT_FEEL.md) | 모멘텀 수치·규칙·비교 검증 |
 | [docs/CAMPAIGN_SYSTEMS.md](docs/CAMPAIGN_SYSTEMS.md) | 마을·경제·동료·보상·저장 |
