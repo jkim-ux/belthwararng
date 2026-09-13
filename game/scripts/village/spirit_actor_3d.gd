@@ -6,10 +6,10 @@ extends Node3D
 ## 떠오름/점프는 표시 애니메이션이며 실제 위치(바닥 X/Z)는 부모가 정한다. 접지 그림자는 바닥에 따로 둔다.
 
 const BODY_R := 0.32
-const HOVER_Y := 0.31
-const BODY_SCALE := Vector3(1.03, 0.88, 1.03)
-const HEAD_R := 0.235
-const HEAD_OFFSET := Vector3(0.10, 0.29, 0.0)
+const HOVER_Y := 0.29
+const BODY_SCALE := Vector3(1.08, 0.84, 1.12)
+const HEAD_R := 0.228
+const HEAD_OFFSET := Vector3(0.115, 0.205, 0.0)
 const ACCESSORIES := ["leaf", "knot", "straw"]
 
 var villager_id: int = 0
@@ -74,45 +74,53 @@ func build(p_villager_id: int, accessory: int) -> void:
 	body.position = Vector3(0, HOVER_Y, 0)
 	add_child(body)
 	var white := Color(0.97, 0.96, 0.93)
-	var grey := Color(0.62, 0.6, 0.58)
+	var grey := Color("514b52")
+	var shoulder := Color("ac968b")
 	body_mesh = _sphere(body, BODY_R, Vector3.ZERO, white, BODY_SCALE)
 	# 작은 둥근 머리와 큰 둥근 몸을 깊게 겹쳐 짧은 목·볼·가슴 윤곽을 만든다.
 	var head := Node3D.new()
 	head.name = "Head"
 	head.position = HEAD_OFFSET
 	body.add_child(head)
-	_sphere(head, HEAD_R, Vector3.ZERO, white)
+	_sphere(head, HEAD_R, Vector3.ZERO, white, Vector3(1.0, 0.9, 1.04))
 	# 눈·부리는 머리에 부착(정면 +X).
-	eye_l = _sphere(head, 0.028, Vector3(0.201, 0.055, 0.10), Color(0.08, 0.08, 0.1))
-	eye_r = _sphere(head, 0.028, Vector3(0.201, 0.055, -0.10), Color(0.08, 0.08, 0.1))
-	_box(head, Vector3(0.075, 0.04, 0.05), Vector3(0.238, 0.005, 0.0), Color(0.25, 0.22, 0.2))
+	eye_l = _sphere(head, 0.019, Vector3(0.216, 0.015, 0.09), Color(0.08, 0.08, 0.1))
+	eye_r = _sphere(head, 0.019, Vector3(0.216, 0.015, -0.09), Color(0.08, 0.08, 0.1))
+	_box(head, Vector3(0.05, 0.03, 0.036), Vector3(0.232, -0.020, 0.0), Color(0.25, 0.22, 0.2))
+	for side in [-1.0, 1.0]:
+		_sphere(head, 0.028, Vector3(0.190, -0.035, side * 0.13), Color(0.93, 0.70, 0.71, 0.40), Vector3(0.10, 0.7, 1.1))
 	# 날개(어깨 피벗)
 	wing_l = Node3D.new()
-	wing_l.position = Vector3(0.0, 0.02, 0.24)
+	wing_l.position = Vector3(0.0, 0.02, 0.34)
 	body.add_child(wing_l)
-	_box(wing_l, Vector3(0.28, 0.05, 0.2), Vector3(-0.04, 0.0, 0.1), grey)
+	_sphere(wing_l, 0.16, Vector3(-0.065, -0.025, 0.020), grey, Vector3(1.2, 0.52, 0.13))
+	_sphere(wing_l, 0.08, Vector3(0.030, 0.010, 0.035), shoulder, Vector3(1.0, 0.65, 0.08))
+	_sphere(wing_l, 0.09, Vector3(-0.09, -0.025, 0.041), white, Vector3(1.0, 0.20, 0.06))
 	wing_r = Node3D.new()
-	wing_r.position = Vector3(0.0, 0.02, -0.24)
+	wing_r.position = Vector3(0.0, 0.02, -0.34)
 	body.add_child(wing_r)
-	_box(wing_r, Vector3(0.28, 0.05, 0.2), Vector3(-0.04, 0.0, -0.1), grey)
+	_sphere(wing_r, 0.16, Vector3(-0.065, -0.025, -0.020), grey, Vector3(1.2, 0.52, 0.13))
+	_sphere(wing_r, 0.08, Vector3(0.030, 0.010, -0.035), shoulder, Vector3(1.0, 0.65, 0.08))
+	_sphere(wing_r, 0.09, Vector3(-0.09, -0.025, -0.041), white, Vector3(1.0, 0.20, 0.06))
 	# 긴 꼬리(뒤쪽 피벗, 몸통 길이 정도)
 	tail = Node3D.new()
 	tail.position = Vector3(-0.26, -0.02, 0.0)
 	body.add_child(tail)
-	_box(tail, Vector3(0.36, 0.045, 0.07), Vector3(-0.18, 0.0, 0.03), grey)
-	_box(tail, Vector3(0.36, 0.045, 0.07), Vector3(-0.18, 0.0, -0.03), Color(0.7, 0.68, 0.66))
+	_box(tail, Vector3(0.50, 0.025, 0.06), Vector3(-0.25, 0.0, 0.03), grey)
+	_box(tail, Vector3(0.50, 0.025, 0.06), Vector3(-0.25, 0.0, -0.03), grey)
+	_box(tail, Vector3(0.07, 0.026, 0.12), Vector3(-0.475, 0.0, 0.0), white)
 	# 작은 발
-	_box(body, Vector3(0.08, 0.04, 0.05), Vector3(0.05, -0.29, 0.08), Color(0.55, 0.42, 0.3))
-	_box(body, Vector3(0.08, 0.04, 0.05), Vector3(0.05, -0.29, -0.08), Color(0.55, 0.42, 0.3))
+	_box(body, Vector3(0.055, 0.025, 0.04), Vector3(0.05, -0.275, 0.08), Color(0.30, 0.27, 0.27))
+	_box(body, Vector3(0.055, 0.025, 0.04), Vector3(0.05, -0.275, -0.08), Color(0.30, 0.27, 0.27))
 	# 액세서리(잎/물 매듭/짚 매듭) — 역할 제한이 아니라 외형 변주
 	match ACCESSORIES[posmod(accessory, ACCESSORIES.size())]:
 		"leaf":
-			var leaf := _box(head, Vector3(0.16, 0.02, 0.09), Vector3(-0.09, 0.23, 0.04), Color(0.4, 0.72, 0.36))
+			var leaf := _box(head, Vector3(0.14, 0.018, 0.075), Vector3(-0.07, 0.19, 0.04), Color(0.4, 0.72, 0.36))
 			leaf.rotation = Vector3(0.0, 0.5, 0.35)
 		"knot":
 			_sphere(body, 0.06, Vector3(0.30, 0.03, 0.0), Color(0.42, 0.68, 0.92))
 		"straw":
-			_box(head, Vector3(0.05, 0.05, 0.22), Vector3(-0.02, 0.235, 0.0), Color(0.88, 0.76, 0.42))
+			_box(head, Vector3(0.045, 0.045, 0.18), Vector3(-0.02, 0.205, 0.0), Color(0.88, 0.76, 0.42))
 	# 접지 그림자(바닥에 고정, 떠오름과 분리)
 	shadow = MeshInstance3D.new()
 	var cm := CylinderMesh.new()
