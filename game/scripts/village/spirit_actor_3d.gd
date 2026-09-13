@@ -6,8 +6,10 @@ extends Node3D
 ## 떠오름/점프는 표시 애니메이션이며 실제 위치(바닥 X/Z)는 부모가 정한다. 접지 그림자는 바닥에 따로 둔다.
 
 const BODY_R := 0.32
-const HOVER_Y := 0.405           ## 길쭉한 몸의 아랫면이 기존 지면 높이에 맞도록 올림
-const BODY_SCALE := Vector3(0.98, 1.20, 0.94)
+const HOVER_Y := 0.31
+const BODY_SCALE := Vector3(1.03, 0.88, 1.03)
+const HEAD_R := 0.235
+const HEAD_OFFSET := Vector3(0.10, 0.29, 0.0)
 const ACCESSORIES := ["leaf", "knot", "straw"]
 
 var villager_id: int = 0
@@ -74,10 +76,16 @@ func build(p_villager_id: int, accessory: int) -> void:
 	var white := Color(0.97, 0.96, 0.93)
 	var grey := Color(0.62, 0.6, 0.58)
 	body_mesh = _sphere(body, BODY_R, Vector3.ZERO, white, BODY_SCALE)
-	# 눈·부리(정면 +X 방향을 앞으로 본다)
-	eye_l = _sphere(body, 0.035, Vector3(0.26, 0.12, 0.12), Color(0.08, 0.08, 0.1))
-	eye_r = _sphere(body, 0.035, Vector3(0.26, 0.12, -0.12), Color(0.08, 0.08, 0.1))
-	_box(body, Vector3(0.09, 0.05, 0.06), Vector3(0.32, 0.04, 0.0), Color(0.25, 0.22, 0.2))
+	# 작은 둥근 머리와 큰 둥근 몸을 깊게 겹쳐 짧은 목·볼·가슴 윤곽을 만든다.
+	var head := Node3D.new()
+	head.name = "Head"
+	head.position = HEAD_OFFSET
+	body.add_child(head)
+	_sphere(head, HEAD_R, Vector3.ZERO, white)
+	# 눈·부리는 머리에 부착(정면 +X).
+	eye_l = _sphere(head, 0.028, Vector3(0.201, 0.055, 0.10), Color(0.08, 0.08, 0.1))
+	eye_r = _sphere(head, 0.028, Vector3(0.201, 0.055, -0.10), Color(0.08, 0.08, 0.1))
+	_box(head, Vector3(0.075, 0.04, 0.05), Vector3(0.238, 0.005, 0.0), Color(0.25, 0.22, 0.2))
 	# 날개(어깨 피벗)
 	wing_l = Node3D.new()
 	wing_l.position = Vector3(0.0, 0.02, 0.24)
@@ -94,17 +102,17 @@ func build(p_villager_id: int, accessory: int) -> void:
 	_box(tail, Vector3(0.36, 0.045, 0.07), Vector3(-0.18, 0.0, 0.03), grey)
 	_box(tail, Vector3(0.36, 0.045, 0.07), Vector3(-0.18, 0.0, -0.03), Color(0.7, 0.68, 0.66))
 	# 작은 발
-	_box(body, Vector3(0.08, 0.04, 0.05), Vector3(0.05, -0.385, 0.08), Color(0.55, 0.42, 0.3))
-	_box(body, Vector3(0.08, 0.04, 0.05), Vector3(0.05, -0.385, -0.08), Color(0.55, 0.42, 0.3))
+	_box(body, Vector3(0.08, 0.04, 0.05), Vector3(0.05, -0.29, 0.08), Color(0.55, 0.42, 0.3))
+	_box(body, Vector3(0.08, 0.04, 0.05), Vector3(0.05, -0.29, -0.08), Color(0.55, 0.42, 0.3))
 	# 액세서리(잎/물 매듭/짚 매듭) — 역할 제한이 아니라 외형 변주
 	match ACCESSORIES[posmod(accessory, ACCESSORIES.size())]:
 		"leaf":
-			var leaf := _box(body, Vector3(0.16, 0.02, 0.09), Vector3(-0.02, 0.39, 0.04), Color(0.4, 0.72, 0.36))
+			var leaf := _box(head, Vector3(0.16, 0.02, 0.09), Vector3(-0.09, 0.23, 0.04), Color(0.4, 0.72, 0.36))
 			leaf.rotation = Vector3(0.0, 0.5, 0.35)
 		"knot":
-			_sphere(body, 0.06, Vector3(0.18, -0.16, 0.0), Color(0.42, 0.68, 0.92))
+			_sphere(body, 0.06, Vector3(0.30, 0.03, 0.0), Color(0.42, 0.68, 0.92))
 		"straw":
-			_box(body, Vector3(0.05, 0.05, 0.22), Vector3(0.0, 0.375, 0.0), Color(0.88, 0.76, 0.42))
+			_box(head, Vector3(0.05, 0.05, 0.22), Vector3(-0.02, 0.235, 0.0), Color(0.88, 0.76, 0.42))
 	# 접지 그림자(바닥에 고정, 떠오름과 분리)
 	shadow = MeshInstance3D.new()
 	var cm := CylinderMesh.new()
