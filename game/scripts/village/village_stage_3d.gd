@@ -155,7 +155,7 @@ func set_camera(target_x_units: float, p_overview: bool, snap: bool) -> void:
 		tx = MAP_W_UNITS / 2.0
 	cam_x = tx if snap else lerpf(cam_x, tx, 0.15)
 	var pitch := deg_to_rad(PITCH_DEG)
-	var zc := MAP_D_UNITS / 2.0
+	var zc := MAP_D_UNITS / 2.0 - 1.2   # 마을 띠를 화면 가운데보다 조금 아래에 두어 건물 높이가 위쪽 여백에 들어오게
 	var target := Vector3(cam_x, 0.0, zc)
 	camera.position = target + Vector3(0.0, CAM_DIST * sin(pitch), CAM_DIST * cos(pitch))
 	camera.rotation = Vector3(-pitch, 0.0, 0.0)
@@ -798,7 +798,7 @@ func sync_actors(vs: VillageState, sim: VillageSim, delta: float) -> void:
 # ------------------------------------------------------------------ 바람·수확 효과
 
 func _ribbon_material() -> StandardMaterial3D:
-	return mat(Color(0.9, 1.0, 0.95, 0.55), true)
+	return mat(Color(0.92, 1.0, 0.96, 0.42), true)
 
 func _sync_wind(vid: int, node: SpiritActor3D, st: Dictionary, vs: VillageState, sim: VillageSim, delta: float) -> void:
 	var working: bool = st.state == "work" and node.windup_t >= 0.2 and st.target.x >= 0
@@ -837,7 +837,7 @@ func _sync_wind(vid: int, node: SpiritActor3D, st: Dictionary, vs: VillageState,
 			var k := float(i) / 12.0
 			var p := from.lerp(to, k)
 			p.y += sin(k * PI) * 0.35 + sin(anim_t * 9.0 + k * 9.0 + line) * 0.07
-			p += side * (offset + sin(anim_t * 6.0 + k * 7.0 + line * 2.0) * 0.5)
+			p += side * (offset + sin(anim_t * 6.0 + k * 7.0 + line * 2.0) * 0.35)
 			var width := 0.05 * (1.0 - absf(k - 0.5) * 1.2)
 			im.surface_add_vertex(p + Vector3(0.0, width, 0.0))
 			im.surface_add_vertex(p - Vector3(0.0, width, 0.0))
