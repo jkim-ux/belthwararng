@@ -13,12 +13,12 @@ const CELL_D := 0.9            ## 논리 칸 1 → 깊이(Z) 단위 (표시에�
 const PITCH_DEG := 20.0
 const ORTHO_SIZE := 8.5        ## 작은 정원: 기존 12 대비 약 1.41배 가까운 직교 줌
 const CAM_DIST := 60.0
-const BACKGROUND_COLOR := Color("91b8bd")
+const BACKGROUND_COLOR := Color("b5cddd")
 const MAP_W_UNITS := VillageTemplate.WIDTH * CELL_W
 const MAP_D_UNITS := VillageTemplate.HEIGHT * CELL_D
 
 ## 건물 종류별 대략 높이(선택 영역·가림 계산용)
-const KIND_HEIGHT := {"farm": 0.7, "well": 1.5, "canal": 0.3, "dam": 1.5, "lumber": 1.3, "quarry": 1.1, "house": 2.3, "road": 0.1, "repair": 0.9, "facility": 1.9}
+const KIND_HEIGHT := {"farm": 0.95, "well": 1.85, "canal": 0.3, "dam": 1.6, "lumber": 1.6, "quarry": 1.6, "house": 2.7, "road": 0.15, "repair": 1.25, "facility": 2.7}
 
 var template: VillageTemplate
 var data: CampaignData
@@ -69,7 +69,8 @@ func setup(p_template: VillageTemplate, p_data: CampaignData) -> void:
 	light = DirectionalLight3D.new()
 	light.name = "Sun"
 	light.rotation_degrees = Vector3(-52.0, 28.0, 0.0)
-	light.light_energy = 1.05
+	light.light_energy = 0.9
+	light.shadow_enabled = true
 	light.light_color = Color(1.0, 0.97, 0.9)
 	add_child(light)
 	var env := WorldEnvironment.new()
@@ -77,7 +78,7 @@ func setup(p_template: VillageTemplate, p_data: CampaignData) -> void:
 	e.background_mode = Environment.BG_COLOR
 	e.background_color = BACKGROUND_COLOR
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	e.ambient_light_color = Color(0.86, 0.9, 0.92)
+	e.ambient_light_color = Color(0.93, 0.91, 0.85)
 	e.ambient_light_energy = 0.6
 	env.environment = e
 	add_child(env)
@@ -252,13 +253,34 @@ func _clear_children(n: Node) -> void:
 		n.remove_child(c)
 		c.queue_free()
 
+## One combined mesh per prop, shared by background, workshop and editor scenes.
+func _art(parent: Node3D, id: String, pos: Vector3 = Vector3.ZERO, sc: Vector3 = Vector3.ONE, variant: int = 0, alpha: float = 1.0, tint: Color = Color.WHITE) -> MeshInstance3D:
+	var m := GardenAssets.make(id, variant, alpha, tint)
+	m.position = pos
+	m.scale = sc
+	parent.add_child(m)
+	return m
+
+## Rotate in logical directions, then fit X/Z to the unchanged compressed-depth footprint.
+func _fit_art(parent: Node3D, id: String, w: float, d: float, rot: int, alpha: float, tint: Color) -> MeshInstance3D:
+	var m := _art(parent, id, Vector3.ZERO, Vector3.ONE, 0, alpha, tint)
+	var aabb := m.mesh.get_aabb()
+	var rb := Basis(Vector3.UP, -posmod(rot, 4) * PI / 2.0)
+	var rotated := Transform3D(rb, Vector3.ZERO) * aabb
+	var scale_x := (w - 0.25) / maxf(rotated.size.x, 0.01)
+	var scale_z := (d - 0.12) / maxf(rotated.size.z, 0.01)
+	var basis := rb.scaled(Vector3(scale_x, 1.0, scale_z))
+	var center := basis * aabb.get_center()
+	m.transform = Transform3D(basis, Vector3(-center.x, 0.0, -center.z))
+	return m
+
 # ------------------------------------------------------------------ 지형
 
-const COL_GROUND := Color("88a078")
+const COL_GROUND := Color("98a875")
 const COL_FERTILE := Color(0.5, 0.38, 0.24)
 const COL_RIVER := Color(0.36, 0.62, 0.86)
 const COL_CLIFF := Color(0.56, 0.54, 0.5)
-const COL_PATH := Color("baa57e")
+const COL_PATH := Color("c6af87")
 const COL_FOREST := Color(0.3, 0.5, 0.3)
 const COL_ROCK := Color(0.6, 0.58, 0.55)
 const COL_DAM_SITE := Color(0.55, 0.64, 0.7)
@@ -316,17 +338,10 @@ func _build_terrain() -> void:
 				"~":
 					if (x + y) % 2 == 0:
 						box(terrain_root, Vector3(CELL_W * 0.5, 0.02, 0.08), center + Vector3(0.0, -0.1, -0.15), Color(0.7, 0.85, 1.0))
-				"#":
-					box(terrain_root, Vector3(CELL_W, 1.6, CELL_D), center + Vector3(0.0, 0.8, 0.0), COL_CLIFF.lightened(0.05 if (x + y) % 2 == 0 else 0.0))
 				"W":
-					# 숲 작업 구역: 나무 두 그루(원뿔 잎)
-					cyl(terrain_root, 0.08, 0.12, 0.5, center + Vector3(-0.45, 0.25, 0.1), Color(0.42, 0.3, 0.18))
-					cyl(terrain_root, 0.0, 0.55, 1.1, center + Vector3(-0.45, 1.0, 0.1), Color(0.2, 0.46, 0.24))
-					cyl(terrain_root, 0.08, 0.12, 0.5, center + Vector3(0.5, 0.25, -0.15), Color(0.42, 0.3, 0.18))
-					cyl(terrain_root, 0.0, 0.5, 1.0, center + Vector3(0.5, 0.9, -0.15), Color(0.24, 0.5, 0.26))
-				"Q":
-					box(terrain_root, Vector3(CELL_W * 0.7, 0.7, CELL_D * 0.7), center + Vector3(0.1, 0.35, 0.0), COL_ROCK.lightened(0.08), Vector3(0.0, 0.3, 0.0))
-					box(terrain_root, Vector3(CELL_W * 0.35, 0.45, CELL_D * 0.4), center + Vector3(-0.6, 0.22, 0.15), COL_ROCK.darkened(0.08), Vector3(0.0, -0.4, 0.0))
+					_art(terrain_root, "tree", center, Vector3(0.47, 0.54, 0.38), x + y)
+				"Q", "#":
+					_art(terrain_root, "rock", center, Vector3(1.0, 1.0, 0.8), x + y)
 				"x":
 					# 끊긴 길: 기울어진 널빤지
 					box(terrain_root, Vector3(1.2, 0.06, 0.25), center + Vector3(0.0, 0.05, 0.0), Color(0.45, 0.33, 0.22), Vector3(0.0, 0.5, 0.15))
@@ -397,120 +412,45 @@ func build_building_visual(def: BuildingDef, b: Dictionary, water: Dictionary, a
 	var origin := cell_to_world(Vector2(float(b.x), float(b.y)))
 	n.position = origin + Vector3(w / 2.0, 0.0, d / 2.0)
 	var under: bool = String(b.get("state", "complete")) == "construction"
-	var ddir := _door_dir(rot)
 	var col := func(c: Color) -> Color:
 		var cc := Color(c.r * tint.r, c.g * tint.g, c.b * tint.b, c.a * alpha)
 		return cc
+	var art_alpha := alpha * (0.48 if under else 1.0)
 	match String(def.kind):
 		"farm":
-			# 낮은 흙두둑 3줄 + 성장 단계 + 바구니
-			box(n, Vector3(w - 0.25, 0.14, d - 0.12), Vector3(0.0, 0.07, 0.0), col.call(Color(0.42, 0.3, 0.18)))
-			var stage := 0 if under else VillageSim.growth_stage(b, def)
-			var progress := float(b.get("progress", 0.0))
-			var rows := 3
-			for r in rows:
-				var z := -d / 2.0 + d * (r + 0.5) / rows
-				box(n, Vector3(w - 0.6, 0.12, 0.22), Vector3(0.0, 0.18, z), col.call(Color(0.55, 0.4, 0.24)))
-				if under:
-					continue
-				var cols := 5
-				for k in cols:
-					var x := -w / 2.0 + 0.5 + (w - 1.0) * (k + 0.5) / cols
-					match stage:
-						0:
-							if progress > 0.0:
-								sphere(n, 0.05, Vector3(x, 0.26, z), col.call(Color(0.85, 0.75, 0.45)))
-						1:
-							box(n, Vector3(0.04, 0.22, 0.04), Vector3(x, 0.34, z), col.call(Color(0.35, 0.62, 0.28)))
-							box(n, Vector3(0.18, 0.02, 0.08), Vector3(x + 0.06, 0.42, z), col.call(Color(0.45, 0.75, 0.35)), Vector3(0.0, 0.0, 0.4))
-						_:
-							box(n, Vector3(0.05, 0.42, 0.05), Vector3(x, 0.44, z), col.call(Color(0.36, 0.6, 0.26)))
-							sphere(n, 0.1, Vector3(x, 0.68, z), col.call(Color(0.92, 0.78, 0.3)))
-			# 바구니(앞 오른쪽): 씨앗/빈/찬
-			var basket_pos := Vector3(w / 2.0 - 0.35, 0.16, d / 2.0 - 0.28)
-			cyl(n, 0.24, 0.18, 0.28, basket_pos, col.call(Color(0.72, 0.56, 0.32)))
-			if not under and stage >= 2:
-				sphere(n, 0.12, basket_pos + Vector3(0.0, 0.16, 0.0), col.call(Color(0.92, 0.78, 0.3)))
-			# 물 상태 표식(뒤 왼쪽): 공급 파랑 / 부족 빨강
+			var growth := 0 if under else VillageSim.growth_stage(b, def)
+			var planted := not under and float(b.get("progress", 0.0)) > 0.0
+			var art_stage := growth + 1 if planted else 0
+			_fit_art(n, "farm_%d" % art_stage, w, d, 0, art_alpha, tint)
 			if not under:
 				var watered := bool(water.get("farms", {}).get(int(b.get("id", 0)), {}).get("watered", false))
-				sphere(n, 0.12, Vector3(-w / 2.0 + 0.3, 0.55, -d / 2.0 + 0.25), col.call(Color(0.35, 0.65, 1.0) if watered else Color(0.9, 0.35, 0.3)))
-				box(n, Vector3(0.05, 0.4, 0.05), Vector3(-w / 2.0 + 0.3, 0.2, -d / 2.0 + 0.25), col.call(Color(0.5, 0.4, 0.28)))
+				# Existing water status marker stays legible above the detailed crop bed.
+				sphere(n, 0.10, Vector3(-w / 2.0 + 0.28, 0.7, -d / 2.0 + 0.22), col.call(Color("85b9c2") if watered else Color("cb866d")))
+				box(n, Vector3(0.035, 0.5, 0.035), Vector3(-w / 2.0 + 0.28, 0.25, -d / 2.0 + 0.22), col.call(GardenAssets.WOOD))
 		"well":
-			cyl(n, 0.58, 0.62, 0.55, Vector3(0.0, 0.27, 0.0), col.call(Color(0.62, 0.62, 0.66)))
-			cyl(n, 0.44, 0.44, 0.06, Vector3(0.0, 0.53, 0.0), col.call(Color(0.35, 0.6, 0.9) if not under else Color(0.4, 0.4, 0.42)))
-			box(n, Vector3(0.1, 1.1, 0.1), Vector3(-0.5, 0.75, 0.0), col.call(Color(0.5, 0.36, 0.22)))
-			box(n, Vector3(0.1, 1.1, 0.1), Vector3(0.5, 0.75, 0.0), col.call(Color(0.5, 0.36, 0.22)))
-			sphere(n, 0.55, Vector3(0.0, 1.35, 0.0), col.call(Color(0.42, 0.7, 0.38)), Vector3(1.4, 0.45, 1.1))
+			_fit_art(n, "well", w, d, rot, art_alpha, tint)
+		"house":
+			_fit_art(n, "cottage", w, d, rot, art_alpha, tint)
+		"lumber", "quarry":
+			_fit_art(n, String(def.kind), w, d, rot, art_alpha, tint)
+		"road", "repair":
+			_fit_art(n, String(def.kind), w, d, rot, art_alpha, tint)
 		"canal":
-			var wet := false
 			var c := Vector2i(int(b.x), int(b.y))
 			var cell_comp: Dictionary = water.get("cell_component", {})
 			var comps: Array = water.get("components", [])
-			if not under and cell_comp.has(c):
-				wet = int(comps[cell_comp[c]].capacity) > 0
-			var wc := Color(0.35, 0.6, 0.9) if wet else Color(0.6, 0.62, 0.66)
-			if under:
-				wc = Color(0.62, 0.55, 0.4)
-			box(n, Vector3(CELL_W * 0.45, 0.16, CELL_D * 0.5), Vector3(0.0, 0.08, 0.0), col.call(wc))
-			box(n, Vector3(CELL_W * 0.55, 0.08, CELL_D * 0.6), Vector3(0.0, 0.03, 0.0), col.call(Color(0.5, 0.44, 0.34)))
-			for dd in VillageSim.DIRS:
-				var nb: Vector2i = c + dd
-				if cell_comp.has(nb) and not under:
-					var arm := Vector3(dd.x * CELL_W * 0.28, 0.08, dd.y * CELL_D * 0.25)
-					box(n, Vector3(CELL_W * 0.55 if dd.x != 0 else CELL_W * 0.45, 0.16, CELL_D * 0.5 if dd.y != 0 else CELL_D * 0.5), arm, col.call(wc))
+			var wet := not under and cell_comp.has(c) and int(comps[cell_comp[c]].capacity) > 0
+			var wc := GardenAssets.WATER if wet else GardenAssets.SOIL
+			box(n, Vector3(w - 0.2, 0.08, d - 0.1), Vector3(0, 0.04, 0), col.call(GardenAssets.STONE))
+			box(n, Vector3(w - 0.4, 0.035, d - 0.24), Vector3(0, 0.095, 0), col.call(wc))
+			for sz in [-1.0, 1.0]:
+				box(n, Vector3(w - 0.25, 0.10, 0.08), Vector3(0, 0.08, sz * (d * 0.5 - 0.08)), col.call(GardenAssets.CREAM))
 		"dam":
-			# 작은 바람물레 수문(축소 표현): 몸체 + 물레 + 출구 물
-			box(n, Vector3(w - 0.3, 0.9, d * 0.5), Vector3(0.0, 0.45, -d * 0.15), col.call(Color(0.5, 0.56, 0.64)))
-			var wheel := cyl(n, 0.55, 0.55, 0.12, Vector3(w / 2.0 - 0.7, 0.9, d * 0.2), col.call(Color(0.6, 0.45, 0.28)), Vector3(0.0, 0.0, PI / 2.0))
-			for k in 4:
-				var blade := box(wheel, Vector3(0.08, 0.02, 1.0), Vector3.ZERO, col.call(Color(0.85, 0.72, 0.4)))
-				blade.rotation = Vector3(k * PI / 4.0, 0.0, 0.0)
-			if not under:
-				dam_wheels.append(wheel)
-				box(n, Vector3(w - 0.5, 0.06, d * 0.3), Vector3(0.0, 0.03, d * 0.3), col.call(Color(0.4, 0.66, 0.92)))
-		"lumber":
-			cyl(n, 0.16, 0.16, w - 0.5, Vector3(0.0, 0.16, 0.15), col.call(Color(0.55, 0.38, 0.2)), Vector3(0.0, 0.0, PI / 2.0))
-			cyl(n, 0.16, 0.16, w - 0.5, Vector3(0.0, 0.16, -0.2), col.call(Color(0.5, 0.34, 0.18)), Vector3(0.0, 0.0, PI / 2.0))
-			cyl(n, 0.16, 0.16, w - 0.6, Vector3(0.0, 0.44, -0.02), col.call(Color(0.6, 0.42, 0.22)), Vector3(0.0, 0.0, PI / 2.0))
-			box(n, Vector3(0.1, 1.1, 0.1), Vector3(-w / 2.0 + 0.25, 0.55, -d / 2.0 + 0.2), col.call(Color(0.45, 0.32, 0.2)))
-			box(n, Vector3(0.1, 1.1, 0.1), Vector3(w / 2.0 - 0.25, 0.55, -d / 2.0 + 0.2), col.call(Color(0.45, 0.32, 0.2)))
-			box(n, Vector3(w - 0.3, 0.08, 0.7), Vector3(0.0, 1.12, -d / 2.0 + 0.35), col.call(Color(0.4, 0.66, 0.36)))
-		"quarry":
-			box(n, Vector3(0.8, 0.5, 0.5), Vector3(-0.4, 0.25, 0.1), col.call(Color(0.62, 0.6, 0.58)), Vector3(0.0, 0.3, 0.0))
-			box(n, Vector3(0.6, 0.4, 0.4), Vector3(0.5, 0.2, -0.15), col.call(Color(0.68, 0.66, 0.62)), Vector3(0.0, -0.5, 0.0))
-			box(n, Vector3(0.5, 0.35, 0.35), Vector3(0.1, 0.62, 0.05), col.call(Color(0.72, 0.7, 0.66)), Vector3(0.0, 0.8, 0.0))
-			box(n, Vector3(0.06, 0.9, 0.06), Vector3(w / 2.0 - 0.3, 0.45, d / 2.0 - 0.2), col.call(Color(0.45, 0.32, 0.2)))
-			box(n, Vector3(0.3, 0.08, 0.08), Vector3(w / 2.0 - 0.3, 0.88, d / 2.0 - 0.2), col.call(Color(0.5, 0.5, 0.52)))
-		"house":
-			# 잎 지붕 작은 집: 낮은 몸체, 큰 잎 지붕, 정면 둥근 문
-			box(n, Vector3(w - 0.4, 1.1, d - 0.25), Vector3(0.0, 0.55, 0.0), col.call(Color(0.93, 0.88, 0.76)))
-			sphere(n, 1.0, Vector3(0.0, 1.35, 0.0), col.call(Color(0.42, 0.7, 0.36)), Vector3(w * 0.6, 0.55, d * 0.75))
-			box(n, Vector3(0.5, 0.03, 0.22), Vector3(0.35, 1.9, 0.1), col.call(Color(0.5, 0.78, 0.42)), Vector3(0.0, 0.4, 0.3))
-			var door := cyl(n, 0.26, 0.26, 0.06, Vector3.ZERO, col.call(Color(0.4, 0.28, 0.18)))
-			door.position = Vector3(ddir.x * (w / 2.0 - 0.18), 0.42, ddir.z * (d / 2.0 - 0.1))
-			door.rotation = Vector3(PI / 2.0, 0.0, 0.0) if ddir.z != 0.0 else Vector3(0.0, 0.0, PI / 2.0)
-		"road":
-			box(n, Vector3(w - 0.1, 0.05, d - 0.08), Vector3(0.0, 0.025, 0.0), col.call(Color(0.82, 0.74, 0.55)))
-		"repair":
-			if under:
-				box(n, Vector3(1.4, 0.08, 0.3), Vector3(-0.3, 0.1, 0.1), col.call(Color(0.5, 0.36, 0.22)), Vector3(0.0, 0.4, 0.2))
-				box(n, Vector3(1.4, 0.08, 0.3), Vector3(0.4, 0.14, -0.2), col.call(Color(0.45, 0.32, 0.2)), Vector3(0.0, -0.6, -0.15))
-			else:
-				box(n, Vector3(w - 0.2, 0.1, d - 0.15), Vector3(0.0, 0.05, 0.0), col.call(Color(0.84, 0.76, 0.58)))
-				box(n, Vector3(0.1, 1.0, 0.1), Vector3(w / 2.0 - 0.25, 0.5, -d / 2.0 + 0.2), col.call(Color(0.5, 0.36, 0.22)))
-				sphere(n, 0.14, Vector3(w / 2.0 - 0.25, 1.05, -d / 2.0 + 0.2), col.call(Color(1.0, 0.85, 0.45)))
+			_fit_art(n, "dam", w, d, 0, art_alpha, tint)
+			var wheel := _art(n, "wheel", Vector3(w * 0.5 - 0.85, 0.86, 0.31), Vector3.ONE, 0, art_alpha, tint)
+			if not under and alpha >= 0.999: dam_wheels.append(wheel)
 		_:
-			# 특수 시설: 훈련장(기둥+깃발) / 보급창(상자 더미)
-			box(n, Vector3(w - 0.4, 0.5, d - 0.3), Vector3(0.0, 0.25, 0.0), col.call(Color(0.7, 0.5, 0.42)))
-			if def.facility_id == &"training_ground":
-				box(n, Vector3(0.1, 1.6, 0.1), Vector3(0.0, 0.8, 0.0), col.call(Color(0.5, 0.36, 0.22)))
-				box(n, Vector3(0.6, 0.35, 0.03), Vector3(0.32, 1.45, 0.0), col.call(Color(0.85, 0.3, 0.3)))
-				cyl(n, 0.18, 0.18, 0.9, Vector3(-w / 2.0 + 0.5, 0.45 + 0.5, d / 2.0 - 0.35), col.call(Color(0.8, 0.72, 0.5)))
-			else:
-				box(n, Vector3(0.6, 0.6, 0.6), Vector3(-0.5, 0.8, 0.0), col.call(Color(0.62, 0.45, 0.28)))
-				box(n, Vector3(0.6, 0.6, 0.6), Vector3(0.3, 0.8, 0.1), col.call(Color(0.68, 0.5, 0.3)))
-				box(n, Vector3(0.6, 0.6, 0.6), Vector3(-0.1, 1.4, 0.05), col.call(Color(0.58, 0.42, 0.26)))
+			_fit_art(n, "training" if def.facility_id == &"training_ground" else "shed", w, d, rot, art_alpha, tint)
 	if under and alpha >= 0.999:
 		# 공사 중: 네 귀퉁이 기둥 + 자재 더미 + 진행 높이(바람으로 짓는 중)
 		var frac := clampf(float(b.get("work_done", 0.0)) / maxf(def.work_required, 0.001), 0.0, 1.0)
@@ -619,9 +559,12 @@ func set_faded(ids: Array) -> void:
 
 func _apply_fade(n: Node, faded: bool) -> void:
 	for c in n.get_children():
-		if c is MeshInstance3D and c.has_meta("color"):
-			var col: Color = c.get_meta("color")
-			c.material_override = mat(Color(col.r, col.g, col.b, 0.3 if faded else col.a))
+		if c is MeshInstance3D and c.has_meta("garden_asset"):
+			var base: StandardMaterial3D = c.get_meta("base_material")
+			c.material_override = GardenAssets.material(0.3, base.albedo_color) if faded else base
+		elif c is MeshInstance3D and c.has_meta("color"):
+			var color: Color = c.get_meta("color")
+			c.material_override = mat(Color(color.r, color.g, color.b, 0.3 if faded else color.a))
 		_apply_fade(c, faded)
 
 # ------------------------------------------------------------------ 선택·미리보기·물
@@ -884,7 +827,7 @@ func play_harvest(b: Dictionary, def: BuildingDef, villager_id: int) -> void:
 func update_fx(delta: float) -> void:
 	for w in dam_wheels:
 		if is_instance_valid(w):
-			w.rotate_object_local(Vector3.UP, delta * 1.5)
+			w.rotate_object_local(Vector3.FORWARD, delta * 1.5)
 	for i in range(harvest_fx.size() - 1, -1, -1):
 		var fx: Dictionary = harvest_fx[i]
 		fx.t += delta
@@ -919,47 +862,40 @@ func clear_all() -> void:
 
 func _build_backdrop() -> void:
 	_clear_children(backdrop_root)
-	# 바닥을 지평선 쪽까지 연장해 흰 빈 공간과 사각형 판의 끝이 드러나지 않게 한다.
-	box(backdrop_root, Vector3(180, 0.2, 150), Vector3(MAP_W_UNITS * 0.5, -0.24, -24), Color("809b76"))
+	box(backdrop_root, Vector3(180, 0.2, 150), Vector3(MAP_W_UNITS * 0.5, -0.24, -24), Color("94a576"))
 	var distant := Node3D.new()
 	distant.name = "DistantHills"
 	backdrop_root.add_child(distant)
 	for i in 7:
-		var x := -43.0 + i * 19.0
-		sphere(distant, 1.0, Vector3(x, -3.4, -9.0 - (i % 2) * 0.7), Color("86aa9e") if i % 2 == 0 else Color("7da499"), Vector3(16.0, 4.5 + (i % 3) * 0.3, 4.0))
+		sphere(distant, 1.0, Vector3(-42.0 + i * 18.0, -3.7, -10.0), Color("a8bbb1") if i % 2 == 0 else Color("b5c6bb"), Vector3(16, 4.6 + (i % 3) * 0.25, 4))
 	for i in 6:
-		sphere(distant, 1.0, Vector3(-30.0 + i * 17.0, -3.0, -5.0), Color("6e947e") if i % 2 == 0 else Color("789c7c"), Vector3(12.0, 4.1 + (i % 2) * 0.4, 3.0))
-	# 둥근 수관의 숲. 작업 구역 뒤에 두어 농지와 정령을 가리지 않는다.
+		sphere(distant, 1.0, Vector3(-30.0 + i * 17, -3.3, -5.8), Color("9cac81"), Vector3(12, 4.1, 3))
 	var grove := Node3D.new()
 	grove.name = "GardenGrove"
 	backdrop_root.add_child(grove)
-	for i in 19:
-		var x := -18.0 + i * 4.0
-		var z := -2.3 - float((i * 7) % 5) * 0.3
-		var h := 1.35 + float(i % 3) * 0.2
-		cyl(grove, 0.10, 0.18, h, Vector3(x, h * 0.5 - 0.1, z), Color("837356"))
-		sphere(grove, 1.0, Vector3(x, h, z), Color("557f60") if i % 2 == 0 else Color("67916b"), Vector3(1.4, 0.85, 0.8))
-		sphere(grove, 0.9, Vector3(x + 0.75, h - 0.2, z + 0.1), Color("7b9d70"), Vector3(0.9, 0.75, 0.8))
-	# 뒤쪽 낮은 울타리: 빈 땅과 배경을 구분하되 앞쪽 시야는 열어 둔다.
+	var xs := [-12.0, -7.0, -2.4, 2.8, 7.7, 12.8, 17.0, 27.0, 32.8, 38.0, 43.0]
+	for i in xs.size():
+		var sc := 0.77 + (i % 3) * 0.07
+		_art(grove, "flower_tree" if i % 3 == 0 else "tree", Vector3(xs[i], -0.13, -3.1 - (i % 2) * 0.65), Vector3(sc, sc, sc), i)
+	# Landmark greenhouse and garden shed stay behind the buildable boundary.
+	_art(grove, "greenhouse", Vector3(22.1, -0.06, -2.1), Vector3(1.0, 1.0, 0.88))
+	_art(grove, "shed", Vector3(-4.5, -0.06, -2.0), Vector3(0.82, 0.82, 0.8))
 	var fence := Node3D.new()
 	fence.name = "GardenFence"
 	backdrop_root.add_child(fence)
 	for i in 17:
-		var x := -0.1 + i * 2.0
-		box(fence, Vector3(0.13, 0.72, 0.13), Vector3(x, 0.26, -0.38), Color("b3a17c"))
-		if i < 16:
-			for h in [0.13, 0.45]:
-				box(fence, Vector3(2.0, 0.09, 0.08), Vector3(x + 1.0, h, -0.38), Color("c6b48b"))
-	# 바깥 꽃과 풀: 제거 대상이 아닌 배경 소품이다.
+		_art(fence, "fence", Vector3(-1.0 + i * 2.0, -0.1, -0.38), Vector3(1, 0.84, 1))
 	var flowers := Node3D.new()
 	flowers.name = "BorderFlowers"
 	backdrop_root.add_child(flowers)
-	for i in 32:
-		var x := -3.0 + fmod(float(i * 73), MAP_W_UNITS + 6.0)
-		var z := -1.1 - (i % 3) * 0.4
-		cyl(flowers, 0.018, 0.022, 0.22, Vector3(x, 0.03, z), Color("668554"))
-		sphere(flowers, 0.09, Vector3(x, 0.17, z), Color("e9c77c") if i % 3 else Color("d7a3a0"), Vector3(1.0, 0.55, 1.0))
-	# 낮은 옆 둔덕이 경계를 부드럽게 감싼다.
+	for i in 13:
+		_art(flowers, "planter", Vector3(0.8 + i * 2.65, -0.1, -0.94), Vector3(0.85, 0.85, 0.78), i)
+	for x in [3.2, 15.8, 28.8]:
+		_art(flowers, "lantern", Vector3(x, 0, -0.7), Vector3(0.72, 0.72, 0.72))
+	_art(flowers, "cloud_sign", Vector3(20.0, 0, -0.58), Vector3(0.7, 0.7, 0.7))
+	# Small edge stones and flowers replace square cliff blocks; they never become clearing jobs.
 	for side in [-1.0, 1.0]:
-		var x := -4.0 if side < 0 else MAP_W_UNITS + 4.0
-		sphere(backdrop_root, 1.0, Vector3(x, -1.3, 5.0), Color("739668"), Vector3(3.6, 1.8, 8.0))
+		var x := -1.25 if side < 0 else MAP_W_UNITS + 1.25
+		for i in 4:
+			_art(flowers, "rock", Vector3(x, -0.05, 1.0 + i * 2.4), Vector3(0.8, 0.8, 0.8), i)
+			_art(flowers, "planter", Vector3(x, -0.06, 2.2 + i * 2.4), Vector3(0.75, 0.8, 0.75), i)

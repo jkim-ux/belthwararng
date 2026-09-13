@@ -280,3 +280,11 @@ python3 ../tools/pack_mjpeg_avi.py /tmp/hwr006_frames 12 ../reports/HWR-006_farm
 | `../tools/pack_mjpeg_avi.py` | 캡처 프레임을 MJPEG AVI 로 묶는 보조 스크립트 |
 
 32×24·비옥토·덤불 제거를 전제로 한 이전 마을 테스트는 `tests/legacy/run_village_32x24_tests.gd`에 참고용으로 보존했다. 현재 마을 검증은 위 `run_village_tests.gd`를 실행한다.
+
+## 마을 아트 에셋
+
+구름 온실 원안에 맞춘 [Garden v1 에셋 23종](assets/garden_v1/README.md)을 실제 마을에 적용했다. 나무·꽃 화단·울타리·가로등·간판·바구니·돌 우물·밭·집·시설이 같은 팔레트를 사용한다. `assets/garden_v1/scenes`의 Godot 장면으로 개별 재사용할 수 있다.
+
+```sh
+godot --headless --path . -s tests/run_garden_art_tests.gd
+```
