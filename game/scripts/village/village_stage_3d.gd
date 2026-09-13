@@ -13,6 +13,7 @@ const CELL_D := 0.9            ## 논리 칸 1 → 깊이(Z) 단위 (표시에�
 const PITCH_DEG := 20.0
 const ORTHO_SIZE := 12.0       ## 일반 화면: 세로 단위 수 (가로 약 26 단위 = 13칸 → 마을 32칸이 약 2.4화면)
 const CAM_DIST := 60.0
+const BACKGROUND_COLOR := Color("87a6ab")
 const MAP_W_UNITS := VillageTemplate.WIDTH * CELL_W
 const MAP_D_UNITS := VillageTemplate.HEIGHT * CELL_D
 
@@ -73,10 +74,10 @@ func setup(p_template: VillageTemplate, p_data: CampaignData) -> void:
 	var env := WorldEnvironment.new()
 	var e := Environment.new()
 	e.background_mode = Environment.BG_COLOR
-	e.background_color = Color(0.78, 0.87, 0.93)
+	e.background_color = BACKGROUND_COLOR
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	e.ambient_light_color = Color(0.86, 0.9, 0.92)
-	e.ambient_light_energy = 0.75
+	e.ambient_light_energy = 0.6
 	env.environment = e
 	add_child(env)
 	for n in ["terrain", "obstacle", "building", "water", "select", "actor", "preview", "fx"]:
@@ -251,11 +252,11 @@ func _clear_children(n: Node) -> void:
 
 # ------------------------------------------------------------------ 지형
 
-const COL_GROUND := Color(0.62, 0.72, 0.42)
+const COL_GROUND := Color("759782")
 const COL_FERTILE := Color(0.5, 0.38, 0.24)
 const COL_RIVER := Color(0.36, 0.62, 0.86)
 const COL_CLIFF := Color(0.56, 0.54, 0.5)
-const COL_PATH := Color(0.8, 0.72, 0.52)
+const COL_PATH := Color("baa57e")
 const COL_FOREST := Color(0.3, 0.5, 0.3)
 const COL_ROCK := Color(0.6, 0.58, 0.55)
 const COL_DAM_SITE := Color(0.55, 0.64, 0.7)
