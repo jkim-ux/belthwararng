@@ -5,10 +5,36 @@
 [resource]
 script = ExtResource("1")
 site_id = &"ch1_farm"
-display_name = "비옥한 들판·강가"
-description = "서쪽 숲과 북동 암반 사이에 비옥한 들판이 세 곳 있다. 동쪽 강가에 보를 세울 자리가 있고, 중앙 통행로 북쪽 끝이 무너진 경로 복구 현장이다."
-terrain_rows = PackedStringArray("WWWWWWWWWWWWW.......QQQQQQQQ~~##", "WW..................QQQQQQQQ~~##", "WW..........................~~##", "WW................ffffff....~~##", "WW................ffffff....~~##", "WW................ffffff....~~##", "WW................ffffff....~~##", "WW................ffffff....~~##", "WW................ffffff....~~##", "WW................ffffff....~~##", "WW.............xx.ffffff.ddd~~##", "WW.............xx........ddd~~##", "WW...pppppppppppppppppppp...~~##", "WW.............pp...........~~##", "WW..fffffffff..pp.ffffff....~~##", "WW..fffffffff..pp.ffffff....~~##", "WW..fffffffff..pp.ffffff....~~##", "WW..fffffffff..pp.ffffff....~~##", "WW..fffffffff..pp.ffffff....~~##", "WW..fffffffff..pp.ffffff....~~##", "WW..fffffffff..pp.ffffff....~~##", "WW..fffffffff..pp.ffffff....~~##", "WW.............pp...........~~##", "WW.............ee...........~~##")
-obstacle_rows = PackedStringArray("................................", ".................r..............", ".............t..................", "....t....t.r......bbbbbb........", "..r..t............bbbbbb........", ".......t..........btbbbbr.......", "..........t.t.....bbbbbb........", "...r..............bbbbbb..r.....", ".............t....bbbbtb........", "..................bbbbbb........", "...t........r.....bbbbbb........", "................................", "................................", "................................", "....bbbbbbbbb.....bbbbbb...r....", "....btbbbbbbb.....bbbbbb.t......", "....bbbbbbbbb.....bbtbbb........", "....bbtbbbbbb.....bbbbbbr.......", "....bbbbbbbbb.....bbbbbb..t.....", "....bbbbbbtbb.....bbbbbb........", "...tbbbbbbbbb.....bbbtbbt.......", "....bbbbbbbbb.....bbbbbb..t.....", "................................", "................................")
-spawn = Vector2i(15, 21)
-dam_outlet = Vector2i(24, 10)
-facility_spot = Rect2i(7, 8, 3, 2)
+display_name = "작은 강가 정원"
+description = "16×12칸의 작은 정령 마을. 빈 땅에 바로 농장을 놓고 물길을 연결한다."
+terrain_rows = PackedStringArray(
+"W.........QQQQ.~",
+"W......xx......~",
+"W......xx...ddd~",
+"W...........ddd~",
+"W..............~",
+"W..............~",
+"W..............~",
+"W..............~",
+"Wpppppppppppppp~",
+".......p.......~",
+".......p.......~",
+".......ee......~"
+)
+obstacle_rows = PackedStringArray(
+"................",
+"................",
+"................",
+"................",
+"................",
+"................",
+"................",
+"................",
+"................",
+"................",
+"................",
+"................"
+)
+spawn = Vector2i(7, 10)
+dam_outlet = Vector2i(11, 3)
+facility_spot = Rect2i(7, 5, 3, 2)

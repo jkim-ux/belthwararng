@@ -1,15 +1,18 @@
 class_name VillageTemplate
 extends Resource
-## 마을 1곳의 고정 지형 템플릿(공유 데이터). 32×24 칸, 한 칸 48px 초기값.
-## terrain_rows / obstacle_rows 는 각 24줄·32글자. 실행 중 상태(개간·건물)는 VillageState 가 갖는다.
+## 마을 1곳의 고정 지형 템플릿(공유 데이터). 16×12 칸, 한 칸 48px 초기값.
+## terrain_rows / obstacle_rows 는 각 12줄·16글자. 실행 중 상태(개간·건물)는 VillageState 가 갖는다.
 ##
 ## 지형 글자: '.' 일반 지면, 'f' 비옥한 땅, '~' 강, '#' 절벽, 'e' 출입구(통행·건설 불가 예약),
 ##           'p' 중앙 통행로(통행·건설 불가 예약), 'W' 숲 작업 구역(막힘), 'Q' 암반 작업 구역(막힘),
 ##           'd' 작은 보 부지(강가, 보만 설치), 'x' 경로 복구 현장(고정, 복구 현장만 설치)
 ## 장애물 글자: '.' 없음, 'b' 덤불(1초, 보상 없음), 't' 작은 나무(2초, 목재 4), 'r' 바위(3초, 석재 3)
 
-const WIDTH := 32
-const HEIGHT := 24
+const WIDTH := 16
+const HEIGHT := 12
+const LAYOUT_VERSION := 1
+const LEGACY_WIDTH := 32
+const LEGACY_HEIGHT := 24
 const CELL_PX := 48
 
 @export var site_id: StringName = &""
@@ -17,7 +20,7 @@ const CELL_PX := 48
 @export_multiline var description: String = ""
 @export var terrain_rows: PackedStringArray = PackedStringArray()
 @export var obstacle_rows: PackedStringArray = PackedStringArray()
-@export var spawn: Vector2i = Vector2i(15, 21)          ## 플레이어·주민 시작 칸(출입구 안쪽)
+@export var spawn: Vector2i = Vector2i(7, 10)          ## 플레이어·주민 시작 칸(출입구 안쪽)
 @export var dam_outlet: Vector2i = Vector2i(-1, -1)     ## 보의 육지 물 출구 칸
 @export var facility_spot: Rect2i = Rect2i(0, 0, 3, 2)  ## 기존 저장 이전 시 특수 시설을 놓는 안전한 자리(회전 0)
 

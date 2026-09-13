@@ -63,6 +63,14 @@ func continue_game() -> Dictionary:
 	last_load_message = "; ".join(errors)
 	if r.recovered_from_backup:
 		last_load_message = r.error + ("; " + last_load_message if last_load_message != "" else "")
+	if s.layout_migrated:
+		store.preserve_copy(".large-village.bak")
+		var result := {"ok": true, "status": "", "reason": "", "saved": false, "kind": "migrate"}
+		_commit("migrate", s, result)
+		last_load_message = "작은 마을로 이전했습니다. 보관된 건물은 건설 목록에서 무료로 다시 놓을 수 있습니다."
+		if not result.saved:
+			last_load_message += " 저장 실패 — 원본 유지, 재시도 가능."
+		s.layout_migrated = false
 	if s.migrated_from == 1:
 		# 원본 schema 1 저장을 별도 보존한 뒤 새 형식으로 원자 저장한다. 실패해도 원본은 그대로 남는다.
 		var keep := store.preserve_copy(".v1.bak")

@@ -1,6 +1,6 @@
 class_name VillageStage3D
 extends Node3D
-## 마을 표시 계층(HWR-006): 낮은 측면(벨트스크롤) 카툰 3D. VillageSim 의 32×24 논리 격자·점유·주민 위치를 단일 원본으로 두고
+## 마을 표시 계층(HWR-006): 낮은 측면(벨트스크롤) 카툰 3D. VillageSim 의 16×12 논리 격자·점유·주민 위치를 단일 원본으로 두고
 ## 지형·장애물·건물·정령·플레이어·미리보기·바람 효과를 단순 메시로 그린다. 판정(점유·문·통행)은 격자가 담당하며 여기에는 물리가 없다.
 ##
 ## 좌표 계약: 논리 칸 q=(qx,qy) → 바닥 (CELL_W*qx, 0, CELL_D*qy). 바닥 y(깊이)는 3D Z, 모델 높이는 3D Y.
@@ -11,9 +11,9 @@ extends Node3D
 const CELL_W := 2.0            ## 논리 칸 1 → 가로(X) 단위
 const CELL_D := 0.9            ## 논리 칸 1 → 깊이(Z) 단위 (표시에서만 깊이를 압축)
 const PITCH_DEG := 20.0
-const ORTHO_SIZE := 12.0       ## 일반 화면: 세로 단위 수 (가로 약 26 단위 = 13칸 → 마을 32칸이 약 2.4화면)
+const ORTHO_SIZE := 8.5        ## 작은 정원: 기존 12 대비 약 1.41배 가까운 직교 줌
 const CAM_DIST := 60.0
-const BACKGROUND_COLOR := Color("87a6ab")
+const BACKGROUND_COLOR := Color("91b8bd")
 const MAP_W_UNITS := VillageTemplate.WIDTH * CELL_W
 const MAP_D_UNITS := VillageTemplate.HEIGHT * CELL_D
 
@@ -24,6 +24,7 @@ var template: VillageTemplate
 var data: CampaignData
 var camera: Camera3D
 var light: DirectionalLight3D
+var backdrop_root: Node3D
 var terrain_root: Node3D
 var obstacle_root: Node3D
 var building_root: Node3D
@@ -80,11 +81,12 @@ func setup(p_template: VillageTemplate, p_data: CampaignData) -> void:
 	e.ambient_light_energy = 0.6
 	env.environment = e
 	add_child(env)
-	for n in ["terrain", "obstacle", "building", "water", "select", "actor", "preview", "fx"]:
+	for n in ["backdrop", "terrain", "obstacle", "building", "water", "select", "actor", "preview", "fx"]:
 		var r := Node3D.new()
 		r.name = n
 		add_child(r)
 		set(n + "_root", r)
+	_build_backdrop()
 	_build_terrain()
 	_build_player()
 	cam_x = MAP_W_UNITS / 2.0
@@ -148,16 +150,16 @@ func set_camera(target_x_units: float, p_overview: bool, snap: bool) -> void:
 	var aspect := vs.x / maxf(vs.y, 1.0)
 	var size := ORTHO_SIZE
 	if overview:
-		size = MAP_W_UNITS / aspect + 1.0
+		size = maxf(ORTHO_SIZE, MAP_W_UNITS / aspect + 1.0)
 	camera.size = size
 	var half_w := size * aspect / 2.0
-	var tx := clampf(target_x_units, half_w, maxf(half_w, MAP_W_UNITS - half_w))
+	var tx := MAP_W_UNITS / 2.0 if half_w * 2.0 >= MAP_W_UNITS else clampf(target_x_units, half_w, MAP_W_UNITS - half_w)
 	if overview:
 		tx = MAP_W_UNITS / 2.0
 	cam_x = tx if snap else lerpf(cam_x, tx, 0.15)
 	var pitch := deg_to_rad(PITCH_DEG)
 	var zc := MAP_D_UNITS / 2.0 - 1.2   # 마을 띠를 화면 가운데보다 조금 아래에 두어 건물 높이가 위쪽 여백에 들어오게
-	var target := Vector3(cam_x, 0.0, zc)
+	var target := Vector3(cam_x, 1.5, zc)
 	camera.position = target + Vector3(0.0, CAM_DIST * sin(pitch), CAM_DIST * cos(pitch))
 	camera.rotation = Vector3(-pitch, 0.0, 0.0)
 
@@ -252,7 +254,7 @@ func _clear_children(n: Node) -> void:
 
 # ------------------------------------------------------------------ 지형
 
-const COL_GROUND := Color("759782")
+const COL_GROUND := Color("88a078")
 const COL_FERTILE := Color(0.5, 0.38, 0.24)
 const COL_RIVER := Color(0.36, 0.62, 0.86)
 const COL_CLIFF := Color(0.56, 0.54, 0.5)
@@ -286,14 +288,14 @@ func _build_terrain() -> void:
 			var col := _terrain_color(t)
 			# 칸마다 아주 옅은 명암 차이로 격자가 읽히게
 			if (x + y) % 2 == 1:
-				col = col.darkened(0.035)
+				col = col.darkened(0.012)
 			var h := -0.12 if t == "~" else 0.0
 			var p0 := Vector3(x * CELL_W, h, y * CELL_D)
 			var p1 := Vector3((x + 1) * CELL_W, h, y * CELL_D)
 			var p2 := Vector3((x + 1) * CELL_W, h, (y + 1) * CELL_D)
 			var p3 := Vector3(x * CELL_W, h, (y + 1) * CELL_D)
-			for v in [p0, p2, p1, p0, p3, p2]:
-				st.set_color(col)
+			for v in [p0, p1, p2, p0, p2, p3]:
+				st.set_color(col.srgb_to_linear())  # 정점 색은 선형 공간; 주변 잔디 재질과 같은 명도로 표시
 				st.set_normal(Vector3.UP)
 				st.add_vertex(v)
 	var mi := MeshInstance3D.new()
@@ -301,7 +303,7 @@ func _build_terrain() -> void:
 	var m := StandardMaterial3D.new()
 	m.vertex_color_use_as_albedo = true
 	m.roughness = 1.0
-	m.cull_mode = BaseMaterial3D.CULL_DISABLED   # 바닥은 위에서만 보이므로 감기 방향과 무관하게 그린다
+	m.cull_mode = BaseMaterial3D.CULL_BACK   # Godot 앞면은 시계 방향. 윗면이 조명을 받아야 한다.
 	mi.material_override = m
 	terrain_root.add_child(mi)
 	# 강 반짝임 줄(정적)
@@ -912,3 +914,52 @@ func clear_all() -> void:
 	preview_sig = ""
 	select_sig = ""
 	water_sig = ""
+
+# ------------------------------------------------------------------ 정원 배경 (장식 전용, 논리 격자/입력/통행에 참여하지 않음)
+
+func _build_backdrop() -> void:
+	_clear_children(backdrop_root)
+	# 바닥을 지평선 쪽까지 연장해 흰 빈 공간과 사각형 판의 끝이 드러나지 않게 한다.
+	box(backdrop_root, Vector3(180, 0.2, 150), Vector3(MAP_W_UNITS * 0.5, -0.24, -24), Color("809b76"))
+	var distant := Node3D.new()
+	distant.name = "DistantHills"
+	backdrop_root.add_child(distant)
+	for i in 7:
+		var x := -43.0 + i * 19.0
+		sphere(distant, 1.0, Vector3(x, -3.4, -9.0 - (i % 2) * 0.7), Color("86aa9e") if i % 2 == 0 else Color("7da499"), Vector3(16.0, 4.5 + (i % 3) * 0.3, 4.0))
+	for i in 6:
+		sphere(distant, 1.0, Vector3(-30.0 + i * 17.0, -3.0, -5.0), Color("6e947e") if i % 2 == 0 else Color("789c7c"), Vector3(12.0, 4.1 + (i % 2) * 0.4, 3.0))
+	# 둥근 수관의 숲. 작업 구역 뒤에 두어 농지와 정령을 가리지 않는다.
+	var grove := Node3D.new()
+	grove.name = "GardenGrove"
+	backdrop_root.add_child(grove)
+	for i in 19:
+		var x := -18.0 + i * 4.0
+		var z := -2.3 - float((i * 7) % 5) * 0.3
+		var h := 1.35 + float(i % 3) * 0.2
+		cyl(grove, 0.10, 0.18, h, Vector3(x, h * 0.5 - 0.1, z), Color("837356"))
+		sphere(grove, 1.0, Vector3(x, h, z), Color("557f60") if i % 2 == 0 else Color("67916b"), Vector3(1.4, 0.85, 0.8))
+		sphere(grove, 0.9, Vector3(x + 0.75, h - 0.2, z + 0.1), Color("7b9d70"), Vector3(0.9, 0.75, 0.8))
+	# 뒤쪽 낮은 울타리: 빈 땅과 배경을 구분하되 앞쪽 시야는 열어 둔다.
+	var fence := Node3D.new()
+	fence.name = "GardenFence"
+	backdrop_root.add_child(fence)
+	for i in 17:
+		var x := -0.1 + i * 2.0
+		box(fence, Vector3(0.13, 0.72, 0.13), Vector3(x, 0.26, -0.38), Color("b3a17c"))
+		if i < 16:
+			for h in [0.13, 0.45]:
+				box(fence, Vector3(2.0, 0.09, 0.08), Vector3(x + 1.0, h, -0.38), Color("c6b48b"))
+	# 바깥 꽃과 풀: 제거 대상이 아닌 배경 소품이다.
+	var flowers := Node3D.new()
+	flowers.name = "BorderFlowers"
+	backdrop_root.add_child(flowers)
+	for i in 32:
+		var x := -3.0 + fmod(float(i * 73), MAP_W_UNITS + 6.0)
+		var z := -1.1 - (i % 3) * 0.4
+		cyl(flowers, 0.018, 0.022, 0.22, Vector3(x, 0.03, z), Color("668554"))
+		sphere(flowers, 0.09, Vector3(x, 0.17, z), Color("e9c77c") if i % 3 else Color("d7a3a0"), Vector3(1.0, 0.55, 1.0))
+	# 낮은 옆 둔덕이 경계를 부드럽게 감싼다.
+	for side in [-1.0, 1.0]:
+		var x := -4.0 if side < 0 else MAP_W_UNITS + 4.0
+		sphere(backdrop_root, 1.0, Vector3(x, -1.3, 5.0), Color("739668"), Vector3(3.6, 1.8, 8.0))

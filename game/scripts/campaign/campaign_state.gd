@@ -13,6 +13,7 @@ var stone: int = 0
 var food: int = 0
 var villages: Dictionary = {}              ## site_id -> VillageState (마을별 배치·주민·개간)
 var supplies_granted: Array = []           ## 초기 물자를 지급한 site_id (String), 1회
+var layout_migrated: bool = false          ## 실행 값: 첫 compact 저장 전 원본 보존
 var migrated_from: int = 0                 ## 로드 시 이전한 원본 schema (실행 값, 저장하지 않음)
 var sites: Dictionary = {}                 ## site_id -> {"liberated": bool, "management": int, "repaired": bool}
 var facilities: Dictionary = {}            ## facility_id -> true
@@ -38,6 +39,7 @@ func duplicate_state() -> CampaignState:
 		s.villages[k] = villages[k].duplicate_state()
 	s.supplies_granted = supplies_granted.duplicate()
 	s.migrated_from = migrated_from
+	s.layout_migrated = layout_migrated
 	s.sites = sites.duplicate(true)
 	s.facilities = facilities.duplicate(true)
 	s.cleared_chapters = cleared_chapters.duplicate()
@@ -139,6 +141,10 @@ static func from_dict(d: Variant, data: CampaignData, error: Array) -> CampaignS
 	if ver == 1:
 		s.migrated_from = 1
 		s._migrate_from_v1(data, error)
+	for v in s.villages.values():
+		if v.layout_version == 0:
+			VillageLayoutMigration.compact(s, v, data)
+			s.layout_migrated = true
 	return s
 
 ## schema 1 → 2: 해방 마을에 템플릿·주민 3명을 만들고, 정비 완료는 복구 현장 완공으로, 산 시설은 예약 자리에 완공 배치한다.

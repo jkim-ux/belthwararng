@@ -6,14 +6,14 @@
 script = ExtResource("1")
 id = &"farm"
 display_name = "농장"
-description = "비옥한 개간지 3×3. 물 공급과 농부 1명이 있으면 30초마다 식량 6."
+description = "빈 땅 어디든 3×3. 물 공급과 농부 1명이 있으면 30초마다 식량 6."
 kind = &"farm"
 size = Vector2i(3, 3)
 cost_currency = 0
 cost_wood = 10
 cost_stone = 2
 work_required = 30.0
-placement = &"fertile"
+placement = &"land"
 rotatable = false
 movable = true
 demolishable = true

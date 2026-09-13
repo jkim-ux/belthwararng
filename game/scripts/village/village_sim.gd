@@ -242,7 +242,7 @@ func can_place(cs: CampaignState, vs: VillageState, def: BuildingDef, x: int, y:
 		if not vs.buildings.has(moving_id) or not def.movable:
 			res.reason = "이동 불가 건물"
 			return res
-	else:
+	elif vs.stored_id_for(def.id) == 0:
 		if def.requires_management > 0 and cs.management(site_id) < def.requires_management:
 			res.reason = "관리도 %d 필요" % def.requires_management
 			return res
@@ -312,7 +312,7 @@ func can_place(cs: CampaignState, vs: VillageState, def: BuildingDef, x: int, y:
 		res.reason = pc.reason
 		return res
 	# 비용
-	if moving_id == 0:
+	if moving_id == 0 and vs.stored_id_for(def.id) == 0:
 		var short := resource_shortage(cs, def)
 		if short != "":
 			res.reason = short
@@ -328,7 +328,8 @@ func can_place_canals(cs: CampaignState, vs: VillageState, raw_cells: Array) -> 
 		var v: Vector2i = c
 		if not cells.has(v):
 			cells.append(v)
-	var res := {"ok": false, "reason": "", "cells": cells, "cost_wood": def.cost_wood * cells.size()}
+	var paid_count := maxi(0, cells.size() - vs.stored_count(&"canal"))
+	var res := {"ok": false, "reason": "", "cells": cells, "cost_wood": def.cost_wood * paid_count}
 	if cells.is_empty():
 		res.reason = "칸 없음"
 		return res
@@ -352,7 +353,7 @@ func can_place_canals(cs: CampaignState, vs: VillageState, raw_cells: Array) -> 
 		if actor_set.has(c):
 			res.reason = "주민/플레이어가 서 있음"
 			return res
-	var short := resource_shortage(cs, def, cells.size())
+	var short := resource_shortage(cs, def, paid_count)
 	if short != "":
 		res.reason = short
 		return res
@@ -376,8 +377,12 @@ func place(cs: CampaignState, vs: VillageState, def: BuildingDef, x: int, y: int
 	var chk := can_place(cs, vs, def, x, y, rot)
 	if not chk.ok:
 		return {"ok": false, "reason": chk.reason, "id": 0}
-	_pay(cs, def)
-	var id := vs.add_building(def, x, y, rot, def.work_required <= 0.0)
+	var id := vs.stored_id_for(def.id)
+	if id != 0:
+		vs.restore_building(id, x, y, rot)
+	else:
+		_pay(cs, def)
+		id = vs.add_building(def, x, y, rot, def.work_required <= 0.0)
 	invalidate_paths()
 	return {"ok": true, "reason": "", "id": id}
 
@@ -386,10 +391,15 @@ func place_canals(cs: CampaignState, vs: VillageState, raw_cells: Array) -> Dict
 	if not chk.ok:
 		return {"ok": false, "reason": chk.reason, "ids": []}
 	var def := data.building(&"canal")
-	_pay(cs, def, chk.cells.size())
+	_pay(cs, def, maxi(0, chk.cells.size() - vs.stored_count(&"canal")))
 	var ids := []
 	for c in chk.cells:
-		ids.append(vs.add_building(def, c.x, c.y, 0, def.work_required <= 0.0))
+		var id := vs.stored_id_for(&"canal")
+		if id != 0:
+			vs.restore_building(id, c.x, c.y, 0)
+		else:
+			id = vs.add_building(def, c.x, c.y, 0, def.work_required <= 0.0)
+		ids.append(id)
 	invalidate_paths()
 	return {"ok": true, "reason": "", "ids": ids}
 

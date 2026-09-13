@@ -1,6 +1,6 @@
 class_name VillageView
 extends Node2D
-## 마을 장면(HWR-005 → HWR-006): 32×24 논리 격자 위를 플레이어가 걷고, 마우스로 건물을 미리보기·배치·회전·이동하며,
+## 마을 장면(HWR-005 → HWR-006): 16×12 논리 격자 위를 플레이어가 걷고, 마우스로 건물을 미리보기·배치·회전·이동하며,
 ## 정령(주민)에게 밭 정돈·공사·농사·생산을 부탁한다. 상태 변경은 모두 CampaignController 의 village_* API(후보 상태 → 검증 → 저장)로 보낸다.
 ## 표시는 SubViewport 안의 VillageStage3D(낮은 측면 카툰 3D)가 맡고, 이 노드는 입력·HUD·2D 라벨 오버레이만 관리한다.
 ## 판정(점유·문·통행·작업)은 VillageSim 의 격자 규칙을 쓴다. 전투 입력(스킬 액션)은 읽지 않는다.
@@ -105,6 +105,8 @@ func _ready() -> void:
 	add_child(overlay)
 	player_pos = (Vector2(template.spawn) + Vector2(0.5, 0.5)) * CELL
 	_build_hud()
+	if not vs().stored_buildings.is_empty():
+		message = "보관된 건물 %d개 — 건설 목록에서 무료 재배치" % vs().stored_buildings.size()
 	_refresh_walk_grid()
 	_update_camera(true)
 	_sync_stage(0.0)
@@ -491,9 +493,10 @@ func _update_preview() -> void:
 			preview = {}
 
 func confirm_place(cell: Vector2i) -> void:
+	var restoring := vs().stored_id_for(place_def.id) != 0
 	var r := campaign.village_place(place_def.id, cell.x, cell.y, place_rot)
 	if r.ok and r.saved:
-		_say("%s 설치 (%s) — 정령에게 공사를 부탁하자" % [place_def.display_name, place_def.cost_text()])
+		_say("%s 무료 재배치 — 이전 진행 유지" % place_def.display_name if restoring else "%s 설치 (%s) — 정령에게 공사를 부탁하자" % [place_def.display_name, place_def.cost_text()])
 		_after_change()
 		if place_def.kind != &"road":
 			cancel_mode()
@@ -508,9 +511,10 @@ func confirm_place(cell: Vector2i) -> void:
 func confirm_canals() -> void:
 	if canal_cells.is_empty():
 		return
+	var paid := maxi(0, canal_cells.size() - vs().stored_count(&"canal"))
 	var r := campaign.village_place_canals(canal_cells)
 	if r.ok and r.saved:
-		_say("수로 %d칸 설치 (목재 %d)" % [r.ids.size(), r.ids.size()])
+		_say("수로 %d칸 설치 (목재 %d)" % [r.ids.size(), paid])
 		_after_change()
 	elif r.ok:
 		_say("수로 저장 실패: %s" % r.reason)
@@ -856,11 +860,11 @@ func _build_hud() -> void:
 	var hv := VBoxContainer.new()
 	help_panel.add_child(hv)
 	hv.add_child(_lbl("바람 정령 마을 조작", 20, Color(1.0, 0.9, 0.65)))
-	hv.add_child(_lbl("방향키/WASD 이동(가로로 길게, 화면 안팎으로도) · E 인접한 덤불/나무/바위 옆에서 '정령에게 정돈 부탁'(한 번 부탁하면 계속 진행) · E 건물 옆에서 선택", 14))
+	hv.add_child(_lbl("방향키/WASD 이동 · E 건물 옆에서 선택 · 출입구에서 E로 나가기. 빈 땅은 치우지 않고 바로 건설할 수 있다.", 14))
 	hv.add_child(_lbl("B 건설 목록 · 목록에서 건물 선택 → 마우스로 반투명 미리보기(바닥 기준) → 좌클릭 확정 · R 회전 · 우클릭/Esc 취소 · 겹친 건물은 같은 자리를 다시 눌러 뒤쪽 선택", 14))
 	hv.add_child(_lbl("수로: 드래그해서 여러 칸을 한 번에(전부 설치 또는 전부 취소) · 길: 연속 설치", 14))
-	hv.add_child(_lbl("설치한 건물은 정령을 배정해야 공사(초당 5)·농사·생산이 진행된다. 플레이어가 직접 짓지 않는다. 건물/장애물 클릭 → 오른쪽 패널에서 배정·부탁·이동·취소·철거", 14))
-	hv.add_child(_lbl("농장은 3×3 비옥한 개간지. 우물(용량 2)·보(용량 4)의 물이 수로를 타고 상하좌우로 닿아야 자란다. 30초 농사에 식량 6. V 관개 보기 · M 전체 보기", 14))
+	hv.add_child(_lbl("설치한 건물은 정령을 배정해야 공사(초당 5)·농사·생산이 진행된다. 플레이어가 직접 짓지 않는다. 건물 클릭 → 오른쪽 패널에서 배정·이동·취소·철거", 14))
+	hv.add_child(_lbl("농장은 빈 땅 어디든 3×3. 우물(용량 2)·보(용량 4)의 물이 수로를 타고 상하좌우로 닿아야 자란다. 30초 농사에 식량 6. V 관개 보기 · M 전체 보기", 14))
 	hv.add_child(_lbl("벌목소/채석장은 20초 주기. 주기 시작에 식량 1이 있으면 먹고 정상 생산, 없으면 절반. 주택 완공 시 정령 2명 합류(최대 2채).", 14))
 	hv.add_child(_lbl("경로 복구 현장(군자금 40)을 완공하면 관리도 60. 훈련장/보급창은 관리도 60에서 건설·완공해야 효과가 난다.", 14))
 	hv.add_child(_lbl("경제 시간은 지금 들어와 있는 이 마을에서만 흐른다. 지도·전투·다른 마을·앱을 닫은 동안에는 생산과 공사가 멈춘다.", 14, Color(1.0, 0.85, 0.6)))
@@ -902,6 +906,10 @@ func _refresh_hud() -> void:
 		elif def.max_per_village > 0 and v.count_of_def(def.id) >= def.max_per_village:
 			enabled = false
 			note = "최대 %d" % def.max_per_village
+		var stored := v.stored_count(def.id)
+		if stored > 0:
+			enabled = true
+			note = "보관 %d · 무료 재배치" % stored
 		var b: Button = e.button
 		if b.disabled == enabled:
 			b.disabled = not enabled

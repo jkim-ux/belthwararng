@@ -17,6 +17,9 @@ const NAMES := ["하루", "미나", "고로", "사요", "타로", "유키", "겐
 
 var site_id: String = ""
 var initialized: bool = false
+var layout_version: int = VillageTemplate.LAYOUT_VERSION
+var stored_buildings: Dictionary = {}  ## 작은 마을에 못 옮긴 건물. 같은 건설 버튼으로 무료 재배치.
+var previous_layout: Dictionary = {}   ## 이전 전 배치 원본(1회 보존).
 var next_id: int = 1
 var cleared: Array = []            ## 제거한 장애물 ID(String)
 var clearing: Dictionary = {}      ## 장애물 ID -> 진행 작업량(float)
@@ -35,6 +38,9 @@ func duplicate_state() -> VillageState:
 	var v := VillageState.new()
 	v.site_id = site_id
 	v.initialized = initialized
+	v.layout_version = layout_version
+	v.stored_buildings = stored_buildings.duplicate(true)
+	v.previous_layout = previous_layout.duplicate(true)
 	v.next_id = next_id
 	v.cleared = cleared.duplicate()
 	v.clearing = clearing.duplicate()
@@ -52,6 +58,9 @@ func to_dict() -> Dictionary:
 	return {
 		"site_id": site_id,
 		"initialized": initialized,
+		"layout_version": layout_version,
+		"stored_buildings": stored_buildings.duplicate(true),
+		"previous_layout": previous_layout.duplicate(true),
 		"next_id": next_id,
 		"cleared": cleared.duplicate(),
 		"clearing": clearing.duplicate(),
@@ -67,6 +76,9 @@ static func from_dict(d: Variant, p_site_id: String, data: CampaignData, error: 
 		v.initialized = false
 		return v
 	v.initialized = bool(d.get("initialized", false))
+	v.layout_version = int(d.get("layout_version", 0))
+	if d.get("previous_layout", {}) is Dictionary:
+		v.previous_layout = d.get("previous_layout", {}).duplicate(true)
 	v.next_id = maxi(1, int(d.get("next_id", 1)))
 	var raw_cleared: Variant = d.get("cleared", [])
 	if typeof(raw_cleared) == TYPE_ARRAY:
@@ -80,6 +92,16 @@ static func from_dict(d: Variant, p_site_id: String, data: CampaignData, error: 
 			if w > 0.0 and not v.cleared.has(String(k)):
 				v.clearing[String(k)] = w
 	var raw_b: Variant = d.get("buildings", {})
+	var raw_stored: Variant = d.get("stored_buildings", {})
+	var stored_ids := {}
+	if raw_b is Dictionary:
+		raw_b = raw_b.duplicate(true)
+		if raw_stored is Dictionary:
+			for k in raw_stored:
+				var key := str(k)
+				if not raw_b.has(key):
+					raw_b[key] = raw_stored[k]
+					stored_ids[int(key)] = true
 	var max_id := 0
 	if typeof(raw_b) == TYPE_DICTIONARY:
 		for k in raw_b.keys():
@@ -95,7 +117,10 @@ static func from_dict(d: Variant, p_site_id: String, data: CampaignData, error: 
 			var y := int(e.get("y", -1))
 			var rot := posmod(int(e.get("rot", 0)), 4)
 			var fp := def.footprint(rot)
-			if x < 0 or y < 0 or x + fp.x > VillageTemplate.WIDTH or y + fp.y > VillageTemplate.HEIGHT:
+			var legacy := v.layout_version == 0 or stored_ids.has(id)
+			var width := VillageTemplate.LEGACY_WIDTH if legacy else VillageTemplate.WIDTH
+			var height := VillageTemplate.LEGACY_HEIGHT if legacy else VillageTemplate.HEIGHT
+			if x < 0 or y < 0 or x + fp.x > width or y + fp.y > height:
 				error.append("%s: 건물 %d 좌표 범위 밖 → 제외" % [p_site_id, id])
 				continue
 			var st := String(e.get("state", "construction"))
@@ -108,6 +133,9 @@ static func from_dict(d: Variant, p_site_id: String, data: CampaignData, error: 
 				"fed": clampi(int(e.get("fed", -1)), -1, 1),
 				"house_returned": bool(e.get("house_returned", false)),
 			}
+			if stored_ids.has(id):
+				v.stored_buildings[id] = v.buildings[id]
+				v.buildings.erase(id)
 			max_id = maxi(max_id, id)
 	var raw_v: Variant = d.get("villagers", {})
 	if typeof(raw_v) == TYPE_DICTIONARY:
@@ -127,7 +155,8 @@ static func from_dict(d: Variant, p_site_id: String, data: CampaignData, error: 
 				var tpl := data.village_template(StringName(p_site_id))
 				var oc := VillageSim.obstacle_cell_of(jo)
 				if tpl == null or oc.x < 0 or tpl.obstacle_at(oc) == "." or v.cleared.has(jo):
-					error.append("%s: 주민 %d 정돈 대상 %s 없음 → 해제" % [p_site_id, id, jo])
+					if v.layout_version != 0:
+						error.append("%s: 주민 %d 정돈 대상 %s 없음 → 해제" % [p_site_id, id, jo])
 					jk = ""
 					jo = ""
 			else:
@@ -170,7 +199,7 @@ func has_building(id: int) -> bool:
 
 func count_of_def(def_id: StringName) -> int:
 	var n := 0
-	for b in buildings.values():
+	for b in buildings.values() + stored_buildings.values():
 		if b.def_id == String(def_id):
 			n += 1
 	return n
@@ -292,3 +321,27 @@ func unassign(villager_id: int) -> void:
 		villagers[villager_id].job_building = 0
 		villagers[villager_id].job_kind = ""
 		villagers[villager_id].job_obstacle = ""
+
+## 가장 먼저 보관된 같은 종류부터 복원한다(추가 자원·완공 보상 없음).
+func stored_id_for(def_id: StringName) -> int:
+	var ids := stored_buildings.keys()
+	ids.sort()
+	for id in ids:
+		if String(stored_buildings[id].def_id) == String(def_id):
+			return int(id)
+	return 0
+
+func stored_count(def_id: StringName) -> int:
+	var n := 0
+	for b in stored_buildings.values():
+		if String(b.def_id) == String(def_id):
+			n += 1
+	return n
+
+func restore_building(id: int, x: int, y: int, rot: int) -> void:
+	var b: Dictionary = stored_buildings[id]
+	b.x = x
+	b.y = y
+	b.rot = posmod(rot, 4)
+	buildings[id] = b
+	stored_buildings.erase(id)
