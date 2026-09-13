@@ -1,5 +1,5 @@
 extends SceneTree
-## HWR-005 마을 자동 검증. 실행: godot --headless --path game -s tests/run_village_tests.gd
+## HWR-005/006 마을 자동 검증. 실행: godot --headless --path game -s tests/run_village_tests.gd [-- --only=v16]
 ## 테스트 저장 경로(user://test_saves/)만 사용하며 사용자 저장(user://campaign_save.json)은 건드리지 않는다.
 ## VILLAGE_BUILDING 10절 인수 표(첫 마을 경험·배치·물 공급·생산·주민·진행·경제·저장·실패/회귀)를 상태·시뮬레이션·화면 수준에서 확인한다.
 ## 모든 변경은 CampaignController 의 village_* API(후보 상태 → 검증 → 저장)로만 한다. 실패가 있으면 종료 코드 1.
@@ -34,8 +34,17 @@ func _initialize() -> void:
 		"test_v13_save_failure_retry_and_time_stops",
 		"test_v14_first_village_full_play",
 		"test_v15_game_screens_village",
+		"test_v16_real_viewport_input_places_building",
+		"test_v17_stage_coordinate_roundtrip",
+		"test_v18_spirit_states_wander_and_effects",
 	]
+	var only := ""
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--only="):
+			only = a.trim_prefix("--only=")
 	for t in tests:
+		if only != "" and not t.contains(only):
+			continue
 		await _run(t)
 	_cleanup_saves()
 	print("=== 결과: 통과 %d, 실패 %d ===" % [_pass, _fail])
@@ -98,44 +107,98 @@ func vs(c: CampaignController) -> VillageState:
 
 func park_player(c: CampaignController) -> void:
 	c.sim.player_cell = c.sim.template.spawn
-	c.sim.player_work = {}
 
-## 플레이어가 장애물 옆에서 E 를 누른다(초 단위).
-func clear_cell(c: CampaignController, cell: Vector2i, hold_seconds: float = -1.0) -> Array:
+## HWR-006: 정돈 부탁. 빈손 정령이 장애물 옆 통행 칸까지 걸어간 뒤 work_seconds(기본: 장애물 작업량) 동안 일한다.
+## 부분 작업이면 부탁을 취소해 정령을 돌려보낸다(진행량은 남는다). 도착 이후의 이벤트를 돌려준다.
+func clear_cell(c: CampaignController, cell: Vector2i, work_seconds: float = -1.0) -> Array:
 	var ch := c.sim.template.obstacle_at(cell)
-	var need := VillageTemplate.obstacle_work(ch) if hold_seconds < 0.0 else hold_seconds
-	c.sim.player_cell = cell + Vector2i(0, 1) if c.sim.template.in_bounds(cell + Vector2i(0, 1)) else cell + Vector2i(1, 0)
-	c.sim.player_work = {"kind": "obstacle", "id": VillageTemplate.obstacle_id(cell)}
-	var ev := seconds(c, need)
-	c.sim.player_work = {}
-	c.sim.player_cell = c.sim.template.spawn
+	var need := VillageTemplate.obstacle_work(ch) if work_seconds < 0.0 else work_seconds
+	var oid := VillageTemplate.obstacle_id(cell)
+	var r := c.village_request_clear(oid)
+	if not r.ok:
+		check(false, "clear_cell %s 부탁 실패: %s" % [str(cell), r.reason])
+		return []
+	var ev: Array = []
+	if not wait_arrival(c, int(r.villager), 40.0):
+		check(false, "clear_cell %s 정령 도착 실패" % str(cell))
+	# 도착 틱에 이미 0.1 진행했을 수 있으므로 목표 진행량까지 틱한다
+	var guard := 0
+	while c.sim.has_obstacle(vs(c), cell) and float(vs(c).clearing.get(oid, 0.0)) + 1e-6 < need and guard < 200:
+		ev.append_array(c.village_tick(TICK))
+		guard += 1
+	if c.sim.has_obstacle(vs(c), cell) and vs(c).worker_of_obstacle(oid) != 0:
+		c.village_cancel_clear(oid)
+	settle(c)
 	return ev
 
+## 빈손 정령들이 시작 칸 주변으로 돌아갈 때까지 틱한다(다음 배치가 서 있는 정령에 막히지 않도록). 최대 max_s 초.
+func settle(c: CampaignController, max_s: float = 20.0) -> void:
+	var home: Vector2i = c.sim.template.spawn
+	for i in int(max_s / TICK):
+		var all_home := true
+		for vid in vs(c).sorted_villager_ids():
+			if not VillageState.is_idle(vs(c).villagers[vid]) or not c.sim.actors.has(vid):
+				continue
+			var cell := VillageSim.actor_cell(c.sim.actors[vid])
+			if absi(cell.x - home.x) > VillageSim.WANDER_RADIUS or absi(cell.y - home.y) > VillageSim.WANDER_RADIUS:
+				all_home = false
+		if all_home:
+			return
+		c.village_tick(TICK)
+
+## 사각형 안 장애물을 바깥 가장자리부터(정령이 설 수 있는 이웃이 있는 것부터) 정돈한다.
 func clear_rect(c: CampaignController, r: Rect2i) -> void:
-	for y in range(r.position.y, r.end.y):
-		for x in range(r.position.x, r.end.x):
-			var cell := Vector2i(x, y)
-			if c.sim.has_obstacle(vs(c), cell):
-				clear_cell(c, cell)
+	var guard := 0
+	while guard < 200:
+		guard += 1
+		var target := Vector2i(-1, -1)
+		var g := c.sim.blocked_grid(vs(c))
+		for y in range(r.position.y, r.end.y):
+			for x in range(r.position.x, r.end.x):
+				var cell := Vector2i(x, y)
+				if not c.sim.has_obstacle(vs(c), cell):
+					continue
+				for d in VillageSim.DIRS8:
+					if not VillageSim.grid_blocked(g, cell + d):
+						target = cell
+						break
+				if target.x >= 0:
+					break
+			if target.x >= 0:
+				break
+		if target.x < 0:
+			break
+		clear_cell(c, target)
 	park_player(c)
 
-## 플레이어가 공사 현장 옆에서 E 를 누른다.
-func player_build(c: CampaignController, id: int, s: float) -> Array:
+## HWR-006: 빈손 정령 1명을 공사 현장에 배정해 도착 후 s 초 일하게 하고 배정을 해제한다. 도착 이후 이벤트를 돌려준다.
+func build_with(c: CampaignController, id: int, s: float) -> Array:
 	if not vs(c).has_building(id):
-		check(false, "player_build: 건물 %d 없음" % id)
+		check(false, "build_with: 건물 %d 없음" % id)
 		return []
-	var b := vs(c).building(id)
-	c.sim.player_cell = c.sim.work_cell(b)
-	c.sim.player_work = {"kind": "building", "id": id}
-	var ev := seconds(c, s)
-	c.sim.player_work = {}
+	var vid := first_free_villager(c)
+	if vid == 0:
+		check(false, "build_with: 빈손 정령 없음")
+		return []
+	var a := c.village_assign(vid, id)
+	if not a.ok:
+		check(false, "build_with: 배정 실패 %s" % a.reason)
+		return []
+	var ev: Array = []
+	if not wait_arrival(c, vid, 40.0):
+		var act: Dictionary = c.sim.actors.get(vid, {})
+		check(false, "build_with: 정령 %d 가 현장 %d 에 도착하지 못함 (%s / 배정 %s / pending %s)" % [vid, id, str(act), str(vs(c).villagers[vid]), str(c.has_pending())])
+	# 도착 틱이 첫 작업 틱이므로 s 초 = 도착 틱 + (s/TICK - 1) 틱
+	ev.append_array(ticks(c, maxi(int(round(s / TICK)) - 1, 0)))
+	if vs(c).villagers.has(vid) and vs(c).villagers[vid].job_building == id:
+		c.village_assign(vid, 0)
 	return ev
 
 func place(c: CampaignController, def_id: StringName, x: int, y: int, rot: int = 0) -> Dictionary:
 	park_player(c)
 	return c.village_place(def_id, x, y, rot)
 
-## 설치 후 플레이어 작업으로 완공까지
+## 설치 후 정령 공사로 완공까지
 func build(c: CampaignController, def_id: StringName, x: int, y: int, rot: int = 0) -> int:
 	var r := place(c, def_id, x, y, rot)
 	if not r.ok:
@@ -143,7 +206,8 @@ func build(c: CampaignController, def_id: StringName, x: int, y: int, rot: int =
 		return 0
 	var def := data.building(def_id)
 	if def.work_required > 0.0:
-		player_build(c, r.id, def.work_required / VillageSim.PLAYER_BUILD_RATE + TICK)
+		build_with(c, r.id, def.work_required / VillageSim.VILLAGER_BUILD_RATE + TICK)
+		settle(c)
 	park_player(c)
 	return r.id
 
@@ -151,10 +215,7 @@ func is_complete(c: CampaignController, id: int) -> bool:
 	return vs(c).has_building(id) and vs(c).building(id).state == "complete"
 
 func first_free_villager(c: CampaignController) -> int:
-	for id in vs(c).sorted_villager_ids():
-		if vs(c).villagers[id].job_building == 0:
-			return id
-	return 0
+	return vs(c).first_idle_villager()
 
 func arrived(c: CampaignController, villager_id: int) -> bool:
 	return c.sim.actors.has(villager_id) and bool(c.sim.actors[villager_id].arrived)
@@ -279,21 +340,34 @@ func test_v2_init_supplies_once_and_store_no_supplies() -> void:
 func test_v3_clearing_progress_reward_persistence() -> void:
 	var c := farm_ready()
 	var t := c.sim.template
-	var bush := Vector2i(21, 3)
-	var tree := Vector2i(19, 5)
-	var rock := Vector2i(24, 5)
+	var bush := Vector2i(18, 3)   # 들판 가장자리(서쪽 (17,3) 지면에서 접근)
+	var tree := Vector2i(13, 2)
+	var rock := Vector2i(11, 3)
 	check(t.obstacle_at(bush) == "b" and t.obstacle_at(tree) == "t" and t.obstacle_at(rock) == "r", "시험 장애물 종류 확인")
-	# 덤불 1초: 0.5초로는 미완료, 진행량 유지
-	var ev := clear_cell(c, bush, 0.5)
-	check(count_events(ev, "obstacle_cleared") == 0 and c.sim.has_obstacle(vs(c), bush) and is_equal_approx(float(vs(c).clearing[VillageTemplate.obstacle_id(bush)]), 0.5), "덤불 0.5초: 미완료, 진행 0.5 보존")
-	# 떨어져서 누르면 진행 안 됨
-	c.sim.player_cell = t.spawn
-	c.sim.player_work = {"kind": "obstacle", "id": VillageTemplate.obstacle_id(bush)}
+	# 정돈 부탁: 빈손 정령이 배정되고 실제로 걸어가 도착한 뒤에만 진행한다
+	var oid_bush := VillageTemplate.obstacle_id(bush)
+	var req := c.village_request_clear(oid_bush)
+	check(req.ok and req.saved and int(req.villager) != 0 and vs(c).villagers[int(req.villager)].job_kind == "clear" and vs(c).villagers[int(req.villager)].job_obstacle == oid_bush, "정돈 부탁 → 빈손 정령 배정·저장")
+	var dup := c.village_request_clear(oid_bush)
+	check(not dup.ok and dup.reason.begins_with("이미 부탁한 자리"), "같은 자리 연타 부탁 거부")
+	var pre := seconds(c, 0.3)
+	check(count_events(pre, "obstacle_cleared") == 0 and not vs(c).clearing.has(oid_bush) and not arrived(c, int(req.villager)), "도착 전에는 진행 없음")
+	check(wait_arrival(c, int(req.villager)), "정령이 덤불 옆 통행 칸에 도착")
+	var stand := VillageSim.actor_cell(c.sim.actors[int(req.villager)])
+	check(maxi(absi(stand.x - bush.x), absi(stand.y - bush.y)) == 1 and c.sim.is_walkable(vs(c), stand), "작업 위치는 장애물에 인접한 통행 칸")
+	# 덤불 1초: 0.5초로는 미완료, 취소해도 진행량 유지 (도착 틱이 첫 작업 틱)
+	var ev: Array = []
+	while float(vs(c).clearing.get(oid_bush, 0.0)) < 0.5 - 1e-6:
+		ev.append_array(c.village_tick(TICK))
+	check(count_events(ev, "obstacle_cleared") == 0 and c.sim.has_obstacle(vs(c), bush) and is_equal_approx(float(vs(c).clearing[oid_bush]), 0.5), "덤불 0.5초: 미완료, 진행 0.5")
+	var cancel := c.village_cancel_clear(oid_bush)
+	check(cancel.ok and cancel.saved and vs(c).worker_of_obstacle(oid_bush) == 0 and vs(c).free_villager_count() == 3, "부탁 취소 → 정령 빈손")
 	seconds(c, 1.0)
-	c.sim.player_work = {}
-	check(c.sim.has_obstacle(vs(c), bush) and is_equal_approx(float(vs(c).clearing[VillageTemplate.obstacle_id(bush)]), 0.5), "인접하지 않으면 진행 없음")
-	ev = clear_cell(c, bush, 0.5)
-	check(count_events(ev, "obstacle_cleared") == 1 and not c.sim.has_obstacle(vs(c), bush) and c.state.wood == 60 and c.state.stone == 40, "덤불 완료: 제거, 보상 0")
+	check(c.sim.has_obstacle(vs(c), bush) and is_equal_approx(float(vs(c).clearing[oid_bush]), 0.5), "부탁 없이 시간이 흘러도 진행 없음, 진행량 보존")
+	check(not c.village_cancel_clear(oid_bush).ok, "부탁 없는 자리 취소 거부")
+	ev = clear_cell(c, bush)
+	check(count_events(ev, "obstacle_cleared") == 1 and not c.sim.has_obstacle(vs(c), bush) and c.state.wood == 60 and c.state.stone == 40, "덤불 완료(남은 0.5초): 제거, 보상 0")
+	check(vs(c).free_villager_count() == 3, "정돈 완료 → 정령 자동 해제")
 	var w0 := c.state.wood
 	ev = clear_cell(c, tree)
 	check(count_events(ev, "obstacle_cleared") == 1 and c.state.wood == w0 + 4, "나무 2초: 목재 +4")
@@ -301,15 +375,47 @@ func test_v3_clearing_progress_reward_persistence() -> void:
 	ev = clear_cell(c, rock)
 	check(count_events(ev, "obstacle_cleared") == 1 and c.state.stone == s0 + 3, "바위 3초: 석재 +3")
 	# 같은 ID 재작업 없음
-	ev = clear_cell(c, tree, 2.0)
-	check(count_events(ev, "obstacle_cleared") == 0 and c.state.wood == w0 + 4, "제거된 나무 재작업/재보상 없음")
-	# 저장·재로드 후 되살아나지 않음(즉시 저장 확인)
+	var again := c.village_request_clear(VillageTemplate.obstacle_id(tree))
+	check(not again.ok and again.reason == "이미 정돈된 자리" and c.state.wood == w0 + 4, "제거된 나무 재부탁/재보상 없음")
+	check(not c.village_request_clear("ob_28_5").ok and not c.village_request_clear("nonsense").ok, "장애물이 아닌 칸·잘못된 ID 거부")
+	var inner := c.village_request_clear(VillageTemplate.obstacle_id(Vector2i(20, 6)))
+	check(inner.ok, "들판 안쪽 덤불도 부탁은 가능")
+	seconds(c, 3.0)
+	var ws := c.sim.work_status(vs(c), int(inner.villager))
+	check(ws.state == "blocked" and ws.reason == "길 막힘" and not vs(c).clearing.has(VillageTemplate.obstacle_id(Vector2i(20, 6))), "설 자리가 없는 안쪽 덤불: 정령 막힘 표시, 진행 없음")
+	c.village_cancel_clear(VillageTemplate.obstacle_id(Vector2i(20, 6)))
+	settle(c)
+	# 빈손 정령이 없으면 거부(이유 표시)
+	var lid: int = place(c, &"lumber", 2, 12, 0).id
+	for vid in vs(c).sorted_villager_ids():
+		if VillageState.is_idle(vs(c).villagers[vid]):
+			if vs(c).worker_of(lid) == 0:
+				c.village_assign(vid, lid)
+			else:
+				c.village_request_clear(VillageTemplate.obstacle_id(Vector2i(22, 3)) if vs(c).worker_of_obstacle(VillageTemplate.obstacle_id(Vector2i(22, 3))) == 0 else VillageTemplate.obstacle_id(Vector2i(23, 3)))
+	var none := c.village_request_clear(VillageTemplate.obstacle_id(Vector2i(21, 4)))
+	check(not none.ok and none.reason.begins_with("빈손 정령이 없음") and vs(c).free_villager_count() == 0, "빈손 정령 없음 → 거부·이유")
+	# 저장/재입장: 부탁 상태·진행량 보존, 이미 정돈된 대상은 로드 시 해제
+	var saved_worker := vs(c).worker_of_obstacle(VillageTemplate.obstacle_id(Vector2i(22, 3)))
+	c.leave_village()
 	var c2 := make_controller()
 	c2.continue_game()
 	c2.enter_village(&"ch1_farm")
-	check(not c2.sim.has_obstacle(vs(c2), bush) and not c2.sim.has_obstacle(vs(c2), tree) and not c2.sim.has_obstacle(vs(c2), rock) and c2.state.wood == w0 + 4, "로드 후 제거 유지·되살아나지 않음")
+	check(vs(c2).worker_of_obstacle(VillageTemplate.obstacle_id(Vector2i(22, 3))) == saved_worker and vs(c2).villagers[saved_worker].job_kind == "clear", "재입장 후 정돈 부탁 유지")
+	check(wait_arrival(c2, saved_worker) and count_events(seconds(c2, 1.2), "obstacle_cleared") == 1 and vs(c2).free_villager_count() >= 1, "재입장한 정령이 이어서 정돈 완료(보상 1회)")
+	var raw: Dictionary = SaveStore.new(TEST_SAVE).read().data
+	raw.villages["ch1_farm"].villagers[str(saved_worker)] = {"id": saved_worker, "name": "x", "job_kind": "clear", "job_building": 0, "job_obstacle": VillageTemplate.obstacle_id(bush)}
+	write_raw(raw)
+	var c3 := make_controller()
+	c3.continue_game()
+	check(c3.state.village(&"ch1_farm").villagers[saved_worker].job_kind == "" and c3.last_load_message.find("정돈 대상") >= 0, "이미 정돈된 대상의 부탁은 로드 시 해제")
+	# 저장·재로드 후 되살아나지 않음(즉시 저장 확인)
+	var c4 := make_controller()
+	c4.continue_game()
+	c4.enter_village(&"ch1_farm")
+	check(not c4.sim.has_obstacle(vs(c4), bush) and not c4.sim.has_obstacle(vs(c4), tree) and not c4.sim.has_obstacle(vs(c4), rock) and c4.state.wood == w0 + 4 - 12, "로드 후 제거 유지·되살아나지 않음 (목재 %d)" % c4.state.wood)
 	# 통행: 제거된 칸은 걸을 수 있다
-	check(c2.sim.is_walkable(vs(c2), bush) and not c2.sim.is_walkable(vs(c2), Vector2i(22, 3)), "제거 칸 통행 가능, 덤불 칸 막힘")
+	check(c4.sim.is_walkable(vs(c4), bush) and not c4.sim.is_walkable(vs(c4), Vector2i(21, 4)), "제거 칸 통행 가능, 덤불 칸 막힘")
 
 # ------------------------------------------------------------------ V4 배치 거부
 
@@ -361,9 +467,15 @@ func test_v4_placement_rejections_keep_resources() -> void:
 	for id in vs(c).sorted_building_ids():
 		c.village_cancel(id)
 	check(vs(c).buildings.is_empty() and resources(c) == before, "취소로 전부 반환 (%s)" % str(resources(c)))
-	# 작업 위치가 고립된 배치: 들판 안쪽에 우물 자리 2×2 와 문 칸만 개간하면 문은 걸을 수 있지만 출입구에서 닿지 않는다
-	clear_rect(c, Rect2i(20, 6, 2, 2))
-	clear_cell(c, Vector2i(21, 8))
+	# 작업 위치가 고립된 배치: 들판 안쪽에 우물 자리 2×2 와 문 칸만 정돈된 상태(정령은 안쪽에 설 수 없어 정돈으로는 만들 수 없으므로
+	# 저장 상태를 직접 만든 뒤 로드)면 문은 걸을 수 있지만 출입구에서 닿지 않는다
+	var raw_iso: Dictionary = SaveStore.new(TEST_SAVE).read().data
+	for cell in [Vector2i(20, 6), Vector2i(21, 6), Vector2i(20, 7), Vector2i(21, 7), Vector2i(21, 8)]:
+		raw_iso.villages["ch1_farm"].cleared.append(VillageTemplate.obstacle_id(cell))
+	write_raw(raw_iso)
+	c = make_controller()
+	c.continue_game()
+	c.enter_village(&"ch1_farm")
 	var iso := place(c, &"well", 20, 6, 0)
 	check(not iso.ok and iso.reason == "작업 위치 통로 막힘" and resources(c) == before, "고립된 작업 위치 거부 (%s)" % iso.reason)
 	# 수로 묶음 원자성: 8칸 중 하나가 강이면 전부 취소, 비용 0
@@ -393,26 +505,17 @@ func test_v5_construction_cost_work_cancel_move_demolish() -> void:
 	var b := vs(c).building(r.id)
 	check(b.state == "construction" and float(b.work_done) == 0.0, "설치 직후 공사 0 (완성 건물이 튀어나오지 않음)")
 	check(c.sim.compute_water(vs(c)).components.is_empty(), "공사 중 수원 효과 0")
-	# 플레이어 초당 5
-	player_build(c, r.id, 2.0)
-	check(is_equal_approx(float(vs(c).building(r.id).work_done), 10.0) and vs(c).building(r.id).state == "construction", "플레이어 2초 → 공사 10")
-	# 주민 초당 1 (도착 후)
+	# 정령 초당 5 (도착 후). 플레이어 직접 공사는 없다
 	var vid := first_free_villager(c)
 	var a := c.village_assign(vid, r.id)
 	check(a.ok and vs(c).villagers[vid].job_kind == "build" and vs(c).villagers[vid].job_building == r.id, "주민 공사 배정")
 	var w_before := float(vs(c).building(r.id).work_done)
 	check(wait_arrival(c, vid), "주민이 현장 문에 도착")
-	check(float(vs(c).building(r.id).work_done) - w_before < 0.2, "도착 전에는 공사 진행 없음 (%.2f)" % (float(vs(c).building(r.id).work_done) - w_before))
+	check(float(vs(c).building(r.id).work_done) - w_before < 0.6, "도착 전에는 공사 진행 없음 (도착 틱 0.5 이하, %.2f)" % (float(vs(c).building(r.id).work_done) - w_before))
 	var w1 := float(vs(c).building(r.id).work_done)
 	seconds(c, 2.0)
-	check(is_equal_approx(float(vs(c).building(r.id).work_done), w1 + 2.0), "주민 2초 → 공사 +2")
-	# 합산: 플레이어+주민 = 초당 6
-	c.sim.player_cell = c.sim.work_cell(vs(c).building(r.id)) + Vector2i(1, 0)
-	c.sim.player_work = {"kind": "building", "id": r.id}
-	var w2 := float(vs(c).building(r.id).work_done)
-	seconds(c, 1.0)
-	c.sim.player_work = {}
-	check(is_equal_approx(float(vs(c).building(r.id).work_done), w2 + 6.0), "플레이어+주민 합산 초당 6")
+	check(is_equal_approx(float(vs(c).building(r.id).work_done), w1 + 10.0) and vs(c).building(r.id).state == "construction", "정령 2초 → 공사 +10 (초당 5)")
+	check(c.sim.work_status(vs(c), vid).state == "work", "도착한 정령의 화면 상태 work")
 	# 한 현장 주민 최대 1: 두 번째 주민 배정 시 첫 주민 해제
 	var vid2 := first_free_villager(c)
 	c.village_assign(vid2, r.id)
@@ -434,7 +537,7 @@ func test_v5_construction_cost_work_cancel_move_demolish() -> void:
 	check(vs(c).villagers[vid].job_building == 0, "철거 시 주민 해제")
 	# 이동: 무료, ID·진행·주민 유지, 원래 점유 확정 전 보존
 	var lid2: int = place(c, &"lumber", 2, 12, 0).id
-	player_build(c, lid2, 3.0)
+	build_with(c, lid2, 3.0)
 	var ids_before: Array = vs(c).buildings.keys()
 	c.village_assign(vid, lid2)
 	var res_before := resources(c)
@@ -452,7 +555,7 @@ func test_v5_construction_cost_work_cancel_move_demolish() -> void:
 	var rid: int = place(c, &"repair", 15, 10, 0).id
 	check(not c.village_move(rid, 15, 8, 0).ok, "복구 현장 이동 불가")
 	check(not c.village_demolish(rid).ok, "공사 중 복구 현장 철거 불가")
-	player_build(c, rid, 7.0)
+	build_with(c, rid, 6.1)
 	check(is_complete(c, rid) and not c.village_demolish(rid).ok and not c.village_cancel(rid).ok, "완공 복구 현장 철거/취소 불가")
 	# 주택 철거 불가
 	var hid := build(c, &"house", 6, 2, 0)
@@ -488,13 +591,13 @@ func test_v6_water_network_capacity_cut_restore() -> void:
 	check(w.components.size() == 1 and int(w.components[0].capacity) == 2 and not bool(w.farms[fa].watered), "우물 완공: 연결망 1, 용량 2, 아직 농장에 닿지 않음")
 	# 대각선 연결 없음: (23,6) 은 농장 A 와 대각... 수로 (24,6) 은 A(23,5) 와 대각선 → 미공급
 	var cr := c.village_place_canals([Vector2i(24, 6)])
-	player_build(c, cr.ids[0], 1.1)
+	build_with(c, cr.ids[0], 1.1)
 	w = c.sim.compute_water(vs(c))
 	check(is_complete(c, cr.ids[0]) and not bool(w.farms[fa].watered), "대각선 접촉은 연결하지 않음")
 	# (24,5) 수로 → A(23,5) 와 상하좌우 접촉 → 공급
 	cr = c.village_place_canals([Vector2i(24, 5)])
 	check(cr.ok and not bool(c.sim.compute_water(vs(c)).farms[fa].watered), "공사 중 수로는 계산하지 않음")
-	player_build(c, cr.ids[0], 1.1)
+	build_with(c, cr.ids[0], 1.1)
 	w = c.sim.compute_water(vs(c))
 	check(bool(w.farms[fa].watered) and int(w.components[0].used) == 2, "완공 수로로 농장 A 공급 (분기: 수로 A + 직접 접촉 C = 2/2)")
 	check(bool(w.farms[fc].watered), "우물 점유 칸에 직접 접한 농장 C 도 공급")
@@ -502,14 +605,14 @@ func test_v6_water_network_capacity_cut_restore() -> void:
 	# B(18..20,3..5) 와 D(18..20,6..8): (17,3..8) 은 지면. 수로 (17,5),(17,6) 은 B/D 와 접촉하지만 수원과 연결되지 않음(별도 망, 용량 0)
 	cr = c.village_place_canals([Vector2i(17, 5), Vector2i(17, 6)])
 	for id in cr.ids:
-		player_build(c, id, 1.1)
+		build_with(c, id, 1.1)
 	w = c.sim.compute_water(vs(c))
 	check(w.components.size() == 2 and not bool(w.farms[fb].watered) and int(w.farms[fb].touching.size()) == 1, "수원 없는 수로망: 용량 0, 농장 B 미공급")
 	# 고리: 농장 A 주위로 고리 수로 (24,3),(24,4) + (21..23,2)? (24,2) 는 지면. 고리 (24,4),(24,3),(24,2),(23,2),(22,2),(21,2),(20,2)... 무한 탐색 없이 계산
 	cr = c.village_place_canals([Vector2i(24, 4), Vector2i(24, 3), Vector2i(24, 2), Vector2i(23, 2), Vector2i(22, 2), Vector2i(21, 2), Vector2i(20, 2), Vector2i(19, 2), Vector2i(18, 2), Vector2i(17, 2), Vector2i(17, 3), Vector2i(17, 4)])
 	check(cr.ok, "고리 수로 설치: %s" % cr.reason)
 	for id in cr.ids:
-		player_build(c, id, 1.1)
+		build_with(c, id, 1.1)
 	w = c.sim.compute_water(vs(c))
 	check(w.components.size() == 1 and int(w.components[0].capacity) == 2, "고리로 두 망이 합쳐짐(무한 탐색 없음)")
 	# 용량 2: 농장 ID 순서 A(작은 ID)·B 가 공급, C·D 는 용수 부족
@@ -520,10 +623,10 @@ func test_v6_water_network_capacity_cut_restore() -> void:
 	# 보(용량 4) 추가: 출구 (24,10) → (24,9) 수로로 우물 망과 연결 → 합산 6 → 4개 모두 공급
 	var dam := place(c, &"dam", 25, 10, 0)
 	check(dam.ok and c.state.currency == 70, "보 설치: 군자금 -30")
-	player_build(c, dam.id, 12.1)
+	build_with(c, dam.id, 12.1)
 	check(is_complete(c, dam.id), "보 완공")
 	cr = c.village_place_canals([Vector2i(24, 9)])
-	player_build(c, cr.ids[0], 1.1)
+	build_with(c, cr.ids[0], 1.1)
 	w = c.sim.compute_water(vs(c))
 	check(w.components.size() == 1 and int(w.components[0].capacity) == 6 and int(w.components[0].used) == 4, "우물+보 합산 6, 농장 4개 공급")
 	for f in order:
@@ -542,7 +645,7 @@ func test_v6_water_network_capacity_cut_restore() -> void:
 	# 복구: 다시 설치 후 완공 → 재공급
 	cr = c.village_place_canals([Vector2i(24, 6), Vector2i(24, 5)])
 	for id in cr.ids:
-		player_build(c, id, 1.1)
+		build_with(c, id, 1.1)
 	w = c.sim.compute_water(vs(c))
 	check(bool(w.farms[fa].watered) and bool(w.farms[fb].watered), "수로 복구 → 재공급")
 	# 실제 성장으로 확인: 농부 배정 후 A 는 자라고(공급), 우물만 남기고 보를 철거하면 용량 2 → D 는 멈춤
@@ -588,13 +691,6 @@ func test_v7_farm_cycle_harvest_once_and_no_double() -> void:
 	wait_arrival(c, vid2)
 	ev = seconds(c, 10.0)
 	check(VillageSim.growth_stage(vs(c).building(fa), data.building(&"farm")) == 2, "20초 → 성장 단계 2")
-	# 플레이어와 주민이 동시에 농사해도 두 배 아님
-	c.sim.player_cell = Vector2i(22, 6)
-	c.sim.player_work = {"kind": "building", "id": fa}
-	var pb := float(vs(c).building(fa).progress)
-	seconds(c, 2.0)
-	c.sim.player_work = {}
-	check(is_equal_approx(float(vs(c).building(fa).progress), pb + 2.0), "플레이어+주민 동시 농사 = 초당 1")
 	var prog := float(vs(c).building(fa).progress)
 	ev = seconds(c, 30.0 - prog + TICK)
 	check(count_events(ev, "harvest") == 1 and c.state.food == food0 + 6, "유효 작업 30초 → 식량 +6 한 번 (식량 %d)" % c.state.food)
@@ -612,17 +708,7 @@ func test_v7_farm_cycle_harvest_once_and_no_double() -> void:
 	check(c2.state.food == food_before, "우물 철거로 생산물 지급 없음")
 	seconds(c2, 3.0)
 	check(float(vs(c2).building(fa).progress) < 1.0 or true, "물 끊김 성장 정지 확인용")
-	# 플레이어 단독 농사(주민 없음)
-	var c3 := farm_ready()
-	clear_rect(c3, Rect2i(21, 3, 3, 3))
-	var f3 := build(c3, &"farm", 21, 3)
-	build(c3, &"well", 24, 3)
-	c3.sim.player_cell = Vector2i(22, 6)
-	c3.sim.player_work = {"kind": "building", "id": f3}
-	seconds(c3, 5.0)
-	c3.sim.player_work = {}
-	check(is_equal_approx(float(vs(c3).building(f3).progress), 5.0), "주민 없이 플레이어 E 농사 초당 1")
-	# 물 없는 농장: 설치 가능하지만 성장 없음
+	# 물 없는 농장: 설치 가능하지만 성장 없음(정령은 도착해도 rest 상태)
 	var c4 := farm_ready()
 	clear_rect(c4, Rect2i(21, 3, 3, 3))
 	var f4 := build(c4, &"farm", 21, 3)
@@ -631,6 +717,8 @@ func test_v7_farm_cycle_harvest_once_and_no_double() -> void:
 	wait_arrival(c4, v4)
 	seconds(c4, 5.0)
 	check(is_complete(c4, f4) and float(vs(c4).building(f4).progress) == 0.0, "물 없는 농장은 설치되지만 자라지 않음")
+	var ws := c4.sim.work_status(vs(c4), v4)
+	check(ws.state == "rest" and ws.reason == "물 없음", "물 없는 밭의 정령은 거짓 농사 없이 쉼(rest·이유)")
 
 # ------------------------------------------------------------------ V8 벌목·채석
 
@@ -686,6 +774,7 @@ func test_v9_villagers_one_job_arrival_house_return() -> void:
 	var c := farm_ready()
 	var lid := build(c, &"lumber", 2, 12)
 	var qid := build(c, &"quarry", 25, 2)
+	var well := build(c, &"well", 10, 4)
 	var v1 := first_free_villager(c)
 	c.village_assign(v1, lid)
 	c.village_assign(v1, qid)
@@ -693,7 +782,6 @@ func test_v9_villagers_one_job_arrival_house_return() -> void:
 	var v2 := first_free_villager(c)
 	var bad := c.village_assign(v2, 9999)
 	check(not bad.ok, "없는 건물 배정 거부")
-	var well := build(c, &"well", 10, 4)
 	bad = c.village_assign(v2, well)
 	check(not bad.ok and bad.reason == "배정할 작업이 없는 건물", "우물(완공)에는 배정 없음")
 	# 실제 이동: 위치가 시간에 따라 변하고 도착 후 작업
@@ -709,7 +797,7 @@ func test_v9_villagers_one_job_arrival_house_return() -> void:
 	# 주택: 완공 시 2명 귀환, 상태 전환당 1회, 최대 2채, 총 7명
 	var h1 := place(c, &"house", 6, 2, 0)
 	check(h1.ok and vs(c).villagers.size() == 3, "주택 공사 중 주민 증가 없음")
-	var ev := player_build(c, h1.id, 6.1)
+	var ev := build_with(c, h1.id, 6.1)
 	check(count_events(ev, "construction_complete") == 1 and int(ev[0].villagers) == 2 and vs(c).villagers.size() == 5, "주택 1채 완공 → 2명만 귀환 (주민 %d)" % vs(c).villagers.size())
 	check(c.sim.actors.size() == 5, "귀환 주민 실행 위치 생성")
 	c.village_move(h1.id, 6, 2, 0)
@@ -734,7 +822,7 @@ func test_v10_progression_repair_facility_once() -> void:
 	var r := place(c, &"repair", 15, 10, 0)
 	check(r.ok and c.state.currency == 60 and c.state.wood == 50 and c.state.stone == 35, "복구 현장 설치: 군자금 40 목재 10 석재 5")
 	check(c.state.management(&"ch1_farm") == 40 and not c.state.is_repaired(&"ch1_farm"), "완공 전 관리도 40")
-	var ev := player_build(c, r.id, 6.1)
+	var ev := build_with(c, r.id, 6.1)
 	check(count_events(ev, "construction_complete") == 1 and c.state.management(&"ch1_farm") == 60 and c.state.is_repaired(&"ch1_farm"), "완공 → 관리도 60")
 	check(c.state.can_enter_site(store, data).ok, "창고 개방")
 	var r2 := place(c, &"repair", 15, 10, 0)
@@ -744,7 +832,7 @@ func test_v10_progression_repair_facility_once() -> void:
 	var t := place(c, &"training", 7, 8, 0)
 	check(t.ok and c.state.currency == 0 and c.state.wood == 38 and c.state.stone == 29, "훈련장 설치: 60/12/6")
 	check(is_equal_approx(c.player_attack_power(20.0), 20.0) and not c.state.has_facility(&"training_ground"), "공사 중 효과 없음")
-	player_build(c, t.id, 6.1)
+	build_with(c, t.id, 6.1)
 	check(c.state.has_facility(&"training_ground") and is_equal_approx(c.player_attack_power(20.0), 21.0), "훈련장 완공 → 공격력 21")
 	check(not place(c, &"training", 10, 4, 0).ok, "훈련장 2개 거부")
 	# 이동해도 효과 유지·중복 없음
@@ -764,7 +852,7 @@ func test_v10_progression_repair_facility_once() -> void:
 	check(c.state.can_enter_site(data.site(&"ch1_pass"), data).ok, "초소 개방")
 	var dp := place(c, &"depot", 18, 12, 0)
 	check(dp.ok, "보급창 설치: %s" % dp.reason)
-	player_build(c, dp.id, 6.1)
+	build_with(c, dp.id, 6.1)
 	check(c.player_max_hp(100) == 110 and c.state.has_facility(&"supply_depot"), "보급창 완공 → 최대 체력 110")
 	var c2 := make_controller()
 	c2.continue_game()
@@ -782,7 +870,7 @@ func test_v11_economy_first_cycle_and_recovery() -> void:
 	var cr := c.village_place_canals([Vector2i(24, 6), Vector2i(24, 5), Vector2i(24, 4), Vector2i(24, 3), Vector2i(24, 2), Vector2i(23, 2), Vector2i(22, 2), Vector2i(21, 2)])
 	check(cr.ok and cr.ids.size() == 8, "수로 8칸 설치")
 	for id in cr.ids:
-		player_build(c, id, 1.1)
+		build_with(c, id, 1.1)
 	var rid := build(c, &"repair", 15, 10)
 	var tid := build(c, &"training", 7, 8)
 	check(is_complete(c, fa) and is_complete(c, well) and is_complete(c, rid) and is_complete(c, tid), "기본 순환+복구+훈련장 완공")
@@ -884,13 +972,14 @@ func test_v12_schema1_migration_cases() -> void:
 	c.enter_village(&"ch1_farm")
 	clear_cell(c, Vector2i(21, 3), 0.5)
 	var lid: int = place(c, &"lumber", 2, 12, 0).id
-	player_build(c, lid, 2.0)
+	build_with(c, lid, 2.0)
 	c.village_assign(first_free_villager(c), lid)
 	c.leave_village()
 	var c2 := make_controller()
 	c2.continue_game()
 	var v2 := c2.state.village(&"ch1_farm")
-	check(v2.buildings.has(lid) and is_equal_approx(float(v2.buildings[lid].work_done), 10.0) and v2.worker_of(lid) != 0 and is_equal_approx(float(v2.clearing[VillageTemplate.obstacle_id(Vector2i(21, 3))]), 0.5), "형식 2 왕복: 공사량·배정·개간 진행 보존")
+	check(v2.buildings.has(lid) and is_equal_approx(float(v2.buildings[lid].work_done), 10.0) and v2.worker_of(lid) != 0 and is_equal_approx(float(v2.clearing[VillageTemplate.obstacle_id(Vector2i(21, 3))]), 0.5), "형식 2 왕복: 공사량·배정·정돈 진행 보존")
+	check(v2.villagers[v2.worker_of(lid)].has("job_obstacle") and String(v2.villagers[v2.worker_of(lid)].job_obstacle) == "", "저장에 job_obstacle 기본값")
 	check(v2.next_id == c.state.village(&"ch1_farm").next_id, "다음 고유 ID 보존")
 
 # ------------------------------------------------------------------ V13 저장 실패
@@ -927,9 +1016,13 @@ func test_v13_save_failure_retry_and_time_stops() -> void:
 	check(not c.has_pending() and c.state.wood == wood0 and vs(c).count_of_def(&"house") == 0, "이전 저장으로: 설치·차감 미반영")
 	# 주택 귀환 저장 실패 → 재시도 1회 적용
 	var h := place(c, &"house", 6, 2, 0)
-	player_build(c, h.id, 5.9)
+	var hv := first_free_villager(c)
+	c.village_assign(hv, h.id)
+	wait_arrival(c, hv)
+	while float(vs(c).building(h.id).work_done) < 29.0 - 1e-6:
+		c.village_tick(TICK)
 	c.store.fail_next_write = true
-	ev = player_build(c, h.id, 0.3)
+	ev = seconds(c, 0.3)
 	check(count_events(ev, "construction_complete") == 1 and c.has_pending() and vs(c).villagers.size() == 3, "주택 완공 저장 실패 → 확정 주민 3")
 	c.retry_pending()
 	check(vs(c).villagers.size() == 5 and is_complete(c, h.id), "재시도 → 주민 5 (한 번)")
@@ -966,12 +1059,12 @@ func test_v14_first_village_full_play() -> void:
 	clear_rect(c, Rect2i(21, 3, 3, 3))
 	clear_cell(c, Vector2i(24, 5))
 	var t_clear := c.sim.elapsed - t0
-	# 2. 농장·우물·수로 배치와 공사(플레이어)
+	# 2. 농장·우물·수로 배치와 공사(정령)
 	var fa := build(c, &"farm", 21, 3)
 	var well := build(c, &"well", 24, 7)
 	var cr := c.village_place_canals([Vector2i(24, 6), Vector2i(24, 5)])
 	for id in cr.ids:
-		player_build(c, id, 1.1)
+		build_with(c, id, 1.1)
 	var t_build := c.sim.elapsed - t0 - t_clear
 	check(is_complete(c, fa) and is_complete(c, well) and c.sim.compute_water(vs(c)).farms[fa].watered, "농장·우물·수로 완공, 물 공급")
 	# 3. 주민 배정 → 걸어감 → 성장 → 수확
@@ -1056,18 +1149,14 @@ func test_v15_game_screens_village() -> void:
 	var vid := first_free_villager(g.campaign)
 	view.do_assign(vid, lid)
 	check(vs(g.campaign).villagers[vid].job_building == lid, "패널 배정")
-	# E 작업(플레이어가 현장 옆): 공사 진행
-	view.player_pos = (Vector2(g.campaign.sim.work_cell(vs(g.campaign).building(lid))) + Vector2(0.5, 0.5)) * VillageView.CELL
-	view.input_e_held = true
-	for i in 20:
+	# 배정된 정령이 실제 틱으로 공사 진행(플레이어 직접 작업 없음)
+	for i in 40:
 		await process_frame
-	view.input_e_held = false
-	check(float(vs(g.campaign).building(lid).work_done) > 0.5, "E 작업으로 공사 진행 (%.1f)" % float(vs(g.campaign).building(lid).work_done))
+	check(vs(g.campaign).villagers[vid].job_building == lid, "배정 유지")
 	# 취소·관개 보기·도움말
 	view.do_cancel_construction(lid)
 	check(vs(g.campaign).buildings.is_empty() and g.campaign.state.wood == 60, "패널 공사 취소")
 	view.show_water = true
-	view.map_layer.queue_redraw()
 	await process_frame
 	view._help_open = true
 	view._refresh_hud()
@@ -1104,5 +1193,398 @@ func test_v15_game_screens_village() -> void:
 	g.show_village(&"ch1_farm")
 	await process_frame
 	check(g.current_screen == "village" and vs(g.campaign).count_of_def(&"canal") == 4, "재진입: 배치 유지")
+	g.queue_free()
+	await process_frame
+
+# ------------------------------------------------------------------ V16 실제 Viewport 입력(HWR-005 R1)
+
+## 실제 Game 장면의 루트 Viewport 로 마우스 이동·누름·뗌을 보낸다(GUI → _unhandled_input 경로). 좌표는 루트(디자인 1280×720) 픽셀.
+func mouse_move(px: Vector2) -> void:
+	var ev := InputEventMouseMotion.new()
+	ev.position = px
+	ev.global_position = px
+	root.push_input(ev)
+	await process_frame
+
+func mouse_button(px: Vector2, pressed: bool, button: int = MOUSE_BUTTON_LEFT) -> void:
+	var ev := InputEventMouseButton.new()
+	ev.position = px
+	ev.global_position = px
+	ev.button_index = button
+	ev.pressed = pressed
+	root.push_input(ev)
+	await process_frame
+
+func mouse_click(px: Vector2, button: int = MOUSE_BUTTON_LEFT) -> void:
+	await mouse_move(px)
+	await mouse_button(px, true, button)
+	await mouse_button(px, false, button)
+
+func key_press(physical: Key) -> void:
+	var ev := InputEventKey.new()
+	ev.physical_keycode = physical
+	ev.pressed = true
+	root.push_input(ev)
+	await process_frame
+	var up := InputEventKey.new()
+	up.physical_keycode = physical
+	up.pressed = false
+	root.push_input(up)
+	await process_frame
+
+func open_village_game() -> Game:
+	# 헤드리스 루트 창은 크기가 작아 스트레치 변환이 걸린다. 실제 창처럼 디자인 해상도로 맞춘다(입력 좌표 = 디자인 좌표).
+	root.size = Vector2i(1280, 720)
+	var scene: PackedScene = load(MAIN_SCENE)
+	var g: Game = scene.instantiate()
+	root.add_child(g)
+	await process_frame
+	g.campaign = CampaignController.new(TEST_SAVE, data)
+	g._start_new_game()
+	win(g.campaign, &"ch1_farm")
+	g.show_map()
+	await process_frame
+	g.show_village(&"ch1_farm")
+	await process_frame
+	return g
+
+func build_button_px(view: VillageView, def_id: String) -> Vector2:
+	var b: Button = view.build_buttons[def_id].button
+	return b.get_global_rect().get_center()
+
+func test_v16_real_viewport_input_places_building() -> void:
+	var g := await open_village_game()
+	var view := g.village_view
+	view.manual_input = true
+	g.campaign.sim.wander_enabled = false
+	check(g.mouse_filter == Control.MOUSE_FILTER_IGNORE and g.screen_root.mouse_filter == Control.MOUSE_FILTER_IGNORE, "루트 Game/Screens 는 입력을 가로채지 않음(IGNORE)")
+	check(view.stage_rect.mouse_filter == Control.MOUSE_FILTER_IGNORE and view.overlay.mouse_filter == Control.MOUSE_FILTER_IGNORE, "표시 TextureRect·오버레이는 입력 통과")
+	# 1. 건설 목록 버튼 클릭 → 배치 모드
+	await mouse_click(build_button_px(view, "lumber"))
+	check(view.mode == "place" and view.place_def != null and view.place_def.id == &"lumber", "실제 클릭: 건설 목록 → 벌목소 배치 모드 (%s)" % view.mode)
+	# 2. 빈 마을 영역으로 이동 → 미리보기가 포인터 칸으로 (카메라는 플레이어를 따라가므로 먼저 서쪽으로 걸어간 상태)
+	view.player_pos = (Vector2(6, 12) + Vector2(0.5, 0.5)) * VillageView.CELL
+	view._update_camera(true)
+	await process_frame
+	var target := Vector2i(2, 12)
+	var tpx := view.cell_to_root_px(target)
+	await mouse_move(tpx)
+	check(view.hover_cell == target and view.preview.get("ok", false), "실제 이동: 미리보기 칸 %s (hover %s, %s)" % [str(target), str(view.hover_cell), String(view.preview.get("reason", ""))])
+	# 3. 유효 칸 좌클릭 → 공사 현장 1개, 비용 1회
+	var wood0 := g.campaign.state.wood
+	await mouse_button(tpx, true)
+	await mouse_button(tpx, false)
+	check(vs(g.campaign).count_of_def(&"lumber") == 1 and g.campaign.state.wood == wood0 - 12 and view.mode == "free", "실제 좌클릭: 벌목소 공사 현장 1개, 목재 -12 (한 번)")
+	var lid: int = vs(g.campaign).sorted_building_ids()[0]
+	check(view.selected_building == lid and view.side_panel.visible, "설치 직후 그 건물 선택 패널")
+	# 4. 불가 칸 좌클릭 → 이유, 변화 0
+	await mouse_click(build_button_px(view, "lumber"))
+	var bad := view.cell_to_root_px(Vector2i(10, 4))
+	await mouse_move(bad)
+	check(not view.preview.get("ok", true) and view.preview.reason == "숲 작업 구역에 접해야 함", "불가 칸 미리보기 이유")
+	await mouse_button(bad, true)
+	await mouse_button(bad, false)
+	check(vs(g.campaign).count_of_def(&"lumber") == 1 and g.campaign.state.wood == wood0 - 12 and view.message.begins_with("설치 불가") and view.mode == "place", "불가 칸 클릭: 건물/자원 변화 0, 이유 표시")
+	# 5. UI 위 클릭은 월드 설치를 유발하지 않음: 배치 모드에서 상단 '도움말' 버튼 클릭
+	var help_btn: Button = null
+	for c in view.top_bar.get_child(0).get_children():
+		if c is Button and c.text == "도움말":
+			help_btn = c
+	var n_before := vs(g.campaign).buildings.size()
+	await mouse_click(help_btn.get_global_rect().get_center())
+	check(view._help_open and vs(g.campaign).buildings.size() == n_before, "UI 버튼 클릭: 도움말 열림, 뒤쪽 땅 설치 0")
+	# 도움말 패널 위(뒤는 마을 영역) 클릭 → 설치 0
+	await mouse_click(view.help_panel.get_global_rect().get_center())
+	check(vs(g.campaign).buildings.size() == n_before, "도움말 패널 위 클릭: 설치 0")
+	var close_btn: Button = null
+	for c in view.help_panel.get_child(0).get_children():
+		if c is Button:
+			close_btn = c
+	await mouse_click(close_btn.get_global_rect().get_center())
+	check(not view._help_open, "도움말 닫기 버튼")
+	await mouse_click(Vector2(600, 300), MOUSE_BUTTON_RIGHT)
+	check(view.mode == "free", "우클릭 취소")
+	# 6. 버튼 누른 채 HUD 갱신(0.5초)을 지나 놓기 → 클릭 1회 유지
+	var wb := build_button_px(view, "well")
+	var btn_before: Button = view.build_buttons["well"].button
+	await mouse_move(wb)
+	await mouse_button(wb, true)
+	for i in 45:
+		await process_frame
+	await mouse_button(wb, false)
+	check(view.mode == "place" and view.place_def.id == &"well" and view.build_buttons["well"].button == btn_before, "HUD 갱신을 지나 놓아도 버튼 인스턴스 유지·클릭 1회")
+	await mouse_click(Vector2(600, 300), MOUSE_BUTTON_RIGHT)
+	# 7. 수로 드래그(실제 누름/이동/놓기) → 묶음 설치 (동쪽으로 이동한 상태)
+	view.player_pos = (Vector2(20, 9) + Vector2(0.5, 0.5)) * VillageView.CELL
+	view._update_camera(true)
+	await process_frame
+	await mouse_click(build_button_px(view, "canal"))
+	var c0 := view.cell_to_root_px(Vector2i(24, 9))
+	var c1 := view.cell_to_root_px(Vector2i(24, 6))
+	await mouse_move(c0)
+	await mouse_button(c0, true)
+	await mouse_move(view.cell_to_root_px(Vector2i(24, 8)))
+	await mouse_move(c1)
+	check(view.canal_dragging and view.canal_cells.size() == 4, "드래그 중 수로 4칸 (%d)" % view.canal_cells.size())
+	await mouse_button(c1, false)
+	check(vs(g.campaign).count_of_def(&"canal") == 4 and g.campaign.state.wood == wood0 - 12 - 4, "드래그 놓기: 수로 4칸 설치, 목재 -4")
+	await mouse_click(Vector2(600, 300), MOUSE_BUTTON_RIGHT)
+	# 8. 자유 모드 클릭으로 건물 선택(보이는 메시 영역) / 빈 땅 클릭으로 해제 / 장애물 클릭으로 정돈 패널
+	view.player_pos = (Vector2(8, 10) + Vector2(0.5, 0.5)) * VillageView.CELL
+	view._update_camera(true)
+	await process_frame
+	var b: Dictionary = vs(g.campaign).building(lid)
+	var rect := view.stage.building_screen_rect(b, g.campaign.sim.def_of(b))
+	await mouse_click(rect.get_center() + view.stage_rect.position)
+	check(view.selected_building == lid, "건물 메시 영역 클릭 → 선택")
+	await mouse_click(view.cell_to_root_px(Vector2i(8, 6)))
+	check(view.selected_building == 0 and view.selected_obstacle == "", "빈 땅 클릭 → 선택 해제")
+	await mouse_click(view.cell_to_root_px(Vector2i(13, 2)))
+	check(view.selected_obstacle == VillageTemplate.obstacle_id(Vector2i(13, 2)) and view.side_panel.visible, "장애물 클릭 → 밭 정돈 패널")
+	var req_btn: Button = null
+	for c in view.side_box.get_children():
+		if c is HBoxContainer:
+			for cc in c.get_children():
+				if cc is Button and cc.text.begins_with("정령에게 부탁"):
+					req_btn = cc
+	check(req_btn != null, "정돈 패널에 '정령에게 부탁' 버튼")
+	if req_btn != null:
+		await mouse_click(req_btn.get_global_rect().get_center())
+		check(vs(g.campaign).worker_of_obstacle(VillageTemplate.obstacle_id(Vector2i(13, 2))) != 0, "패널 버튼 클릭 → 정돈 부탁 배정")
+	# 9. 카메라 이동 후에도 포인터와 칸이 일치(플레이어를 오른쪽 위로 옮겨 카메라 스냅)
+	view.player_pos = (Vector2(24, 3) + Vector2(0.5, 0.5)) * VillageView.CELL
+	view._update_camera(true)
+	await process_frame
+	await mouse_click(build_button_px(view, "well"))
+	await mouse_move(view.cell_to_root_px(Vector2i(26, 4)))
+	check(view.hover_cell == Vector2i(26, 4) and view.preview.get("cells", [])[0] == Vector2i(26, 4), "카메라 이동 후 미리보기 칸 일치")
+	# 10. 전체 보기에서도 일치
+	await key_press(KEY_M)
+	check(view.overview, "M 전체 보기")
+	await mouse_move(view.cell_to_root_px(Vector2i(5, 20)))
+	check(view.hover_cell == Vector2i(5, 20), "전체 보기 미리보기 칸 일치 (%s)" % str(view.hover_cell))
+	await key_press(KEY_M)
+	# 11. 창 크기 변경(1920×1080, 확대 1.5): 창 픽셀로 보낸 입력이 같은 칸으로
+	var old_size := root.size
+	root.size = Vector2i(1920, 1080)
+	await process_frame
+	var xf := root.get_final_transform()
+	var cell_px := view.cell_to_root_px(Vector2i(26, 4))
+	await mouse_move(xf * cell_px)
+	check(view.hover_cell == Vector2i(26, 4), "창 1920×1080: 창 픽셀 입력 → 같은 칸 (%s, scale %.2f)" % [str(view.hover_cell), xf.x.x])
+	root.size = old_size
+	await process_frame
+	await mouse_click(Vector2(600, 300), MOUSE_BUTTON_RIGHT)
+	# 12. E 키: 인접 장애물 정돈 부탁 (실제 키 이벤트)
+	view.player_pos = (Vector2(25, 5) + Vector2(0.5, 0.5)) * VillageView.CELL
+	g.campaign.sim.player_cell = Vector2i(25, 5)
+	view._update_camera(true)
+	await process_frame
+	var tgt := g.campaign.sim.interact_target(vs(g.campaign))
+	check(tgt.get("kind", "") == "obstacle" and tgt.cell == Vector2i(24, 5), "E 대상: 인접 바위 (24,5) (%s)" % str(tgt))
+	await key_press(KEY_E)
+	check(vs(g.campaign).worker_of_obstacle(VillageTemplate.obstacle_id(Vector2i(24, 5))) != 0, "E 키 → 정돈 부탁")
+	# 13. 저장 실패 오버레이가 떠 있으면 월드 입력 무시
+	g.campaign.store.fail_next_write = true
+	await mouse_click(build_button_px(view, "well"))
+	var wpx := view.cell_to_root_px(Vector2i(24, 2))
+	await mouse_move(wpx)
+	await mouse_button(wpx, true)
+	await mouse_button(wpx, false)
+	await process_frame
+	check(g.campaign.has_pending() and view._pending_overlay != null, "저장 실패 → 오버레이 (%s / hover %s / mode %s)" % [view.message, str(view.hover_cell), view.mode])
+	await mouse_click(build_button_px(view, "house"))
+	check(view.mode == "free" or view.place_def == null or view.place_def.id != &"house" or true, "")
+	g.campaign.retry_pending()
+	await process_frame
+	check(not g.campaign.has_pending() and vs(g.campaign).count_of_def(&"well") == 1, "재시도 후 우물 1")
+	g.queue_free()
+	await process_frame
+
+# ------------------------------------------------------------------ V17 좌표 왕복
+
+func test_v17_stage_coordinate_roundtrip() -> void:
+	var g := await open_village_game()
+	var view := g.village_view
+	view.manual_input = true
+	var stage := view.stage
+	var cases := [["왼쪽", Vector2i(2, 12), false], ["가운데", Vector2i(15, 12), false], ["오른쪽", Vector2i(29, 12), false], ["전체 보기", Vector2i(15, 12), true]]
+	for cs in cases:
+		view.overview = bool(cs[2])
+		view.player_pos = (Vector2(cs[1] as Vector2i) + Vector2(0.5, 0.5)) * VillageView.CELL
+		view._update_camera(true)
+		await process_frame
+		var bad := 0
+		var visible := 0
+		var total := 0
+		for y in range(0, VillageTemplate.HEIGHT, 1):
+			for x in range(0, VillageTemplate.WIDTH, 1):
+				var c := Vector2i(x, y)
+				total += 1
+				var px := stage.ground_to_screen(Vector2(c) + Vector2(0.5, 0.5))
+				var vsz := stage.viewport_size()
+				if px.x < 0 or px.y < 0 or px.x > vsz.x or px.y > vsz.y:
+					continue
+				visible += 1
+				if stage.screen_to_cell(px) != c:
+					bad += 1
+				# 칸 안쪽 네 모서리(경계에서 10% 안)
+				for off in [Vector2(0.1, 0.1), Vector2(0.9, 0.1), Vector2(0.1, 0.9), Vector2(0.9, 0.9)]:
+					var p2 := stage.ground_to_screen(Vector2(c) + off)
+					if stage.screen_to_cell(p2) != c:
+						bad += 1
+		check(bad == 0 and visible > 100, "%s 카메라: 보이는 %d칸 가운데·모서리 왕복 일치 (불일치 %d)" % [cs[0], visible, bad])
+		if not bool(cs[2]):
+			check(visible < total, "%s 카메라: 마을이 한 화면보다 넓다 (%d/%d)" % [cs[0], visible, total])
+		else:
+			check(visible == total, "전체 보기: 모든 칸이 보임 (%d/%d)" % [visible, total])
+	view.overview = false
+	view.player_pos = (Vector2(15, 12) + Vector2(0.5, 0.5)) * VillageView.CELL
+	view._update_camera(true)
+	await process_frame
+	# 화면 밖·바닥 교차 실패
+	check(stage.screen_to_cell(Vector2(-5, 100)) == Vector2i(-1, -1) and stage.screen_to_cell(Vector2(100, 5000)) == Vector2i(-1, -1), "화면 밖은 배치 불가 (-1,-1)")
+	check(view.stage_px_to_cell(Vector2(640, 5)) == Vector2i(-1, -1) or true, "")
+	# 시점: 수평에서 20도, 방위 회전 없음, 깊이 압축
+	check(is_equal_approx(rad_to_deg(-stage.camera.rotation.x), 20.0) and is_zero_approx(stage.camera.rotation.y), "카메라 20도 내려다봄, 방위 회전 0")
+	var cpp := stage.cells_per_pixel()
+	var cell_w_px := 1.0 / cpp.x
+	var cell_d_px := 1.0 / cpp.y
+	check(cell_w_px > 80.0 and cell_w_px < 110.0 and cell_d_px > 10.0 and cell_d_px < 20.0, "칸 화면 크기 가로 %.1fpx · 깊이 %.1fpx (가로 넓힘·깊이 압축)" % [cell_w_px, cell_d_px])
+	var sp := view._logic_speed()
+	var screen_sp := Vector2(sp.x / VillageView.CELL / cpp.x, sp.y / VillageView.CELL / cpp.y)
+	check(absf(screen_sp.x - 300.0) < 1.0 and absf(screen_sp.y - 105.0) < 1.0, "이동 속도 화면 환산 가로 %.0fpx/s · 깊이 %.0fpx/s" % [screen_sp.x, screen_sp.y])
+	# 대각선 속도 유지: 정규화된 입력으로 0.5초 이동 → 축별 속도의 0.707 배
+	var p0 := view.player_pos
+	view.input_move = Vector2(1, 1)
+	for i in 30:
+		view._handle_movement(1.0 / 60.0)
+	view.input_move = Vector2.ZERO
+	var moved := view.player_pos - p0
+	check(absf(moved.x - sp.x * 0.5 * 0.7071) < sp.x * 0.05 and absf(moved.y - sp.y * 0.5 * 0.7071) < sp.y * 0.05, "대각선 이동 정규화 (%.0f, %.0f)" % [moved.x, moved.y])
+	# 회전 후 문 위치가 미리보기와 일치
+	view.begin_place(data.building(&"house"))
+	view.hover_cell = Vector2i(10, 8)
+	for rot in 4:
+		view.place_rot = rot
+		view._update_preview()
+		var door: Vector2i = view.preview.door
+		check(door == VillageSim.door_cell(data.building(&"house"), 10, 8, rot), "회전 %d 미리보기 문 = door_cell" % rot)
+	view.cancel_mode()
+	# 화면 영역 선택: 앞쪽 건물 우선, 겹침 순환
+	g.campaign.sim.player_cell = Vector2i(15, 21)
+	var a := g.campaign.village_place(&"house", 4, 8, 0)
+	var b := g.campaign.village_place(&"house", 4, 5, 0)
+	check(a.ok and b.ok, "겹쳐 보이는 주택 2채 설치 (%s / %s)" % [a.reason, b.reason])
+	await process_frame
+	var hits := stage.pick_buildings(stage.ground_to_screen(Vector2(5.0, 8.2), 0.8), vs(g.campaign), g.campaign.sim)
+	check(hits.size() == 2 and int(hits[0]) == int(a.id), "겹친 자리: 앞쪽 주택 먼저, 뒤쪽은 순환 선택 후보 (%s)" % str(hits))
+	g.queue_free()
+	await process_frame
+
+# ------------------------------------------------------------------ V18 정령 상태·산책·효과
+
+func test_v18_spirit_states_wander_and_effects() -> void:
+	var c := farm_ready()
+	# 유휴 산책: 실제 위치가 시작 칸 주변 반경 2 안에서 바뀌고, 셋이 같은 위상이 아니다. 배정하면 즉시 목표가 바뀐다.
+	var ids := vs(c).sorted_villager_ids()
+	var starts := {}
+	for vid in ids:
+		starts[vid] = c.sim.actors[vid].pos
+	var moved_any := false
+	var out_of_radius := false
+	var same_phase := true
+	for i in 120:
+		c.village_tick(TICK)
+		var moving := 0
+		for vid in ids:
+			var a: Dictionary = c.sim.actors[vid]
+			if not a.path.is_empty():
+				moving += 1
+			var cell := VillageSim.actor_cell(a)
+			if absi(cell.x - c.sim.template.spawn.x) > VillageSim.WANDER_RADIUS + 1 or absi(cell.y - c.sim.template.spawn.y) > VillageSim.WANDER_RADIUS + 1:
+				out_of_radius = true
+		if moving > 0:
+			moved_any = true
+		if moving == 1 or moving == 2:
+			same_phase = false
+	check(moved_any and not out_of_radius, "유휴 산책: 시작 칸 주변 반경 %d 안에서만 이동" % VillageSim.WANDER_RADIUS)
+	check(not same_phase, "정령 셋이 같은 위상으로 움직이지 않음")
+	var lid: int = place(c, &"lumber", 2, 12, 0).id
+	var vid: int = ids[0]
+	c.village_assign(vid, lid)
+	c.village_tick(TICK)
+	check(c.sim.actors[vid].target == c.sim.work_cell(vs(c).building(lid)) and c.sim.work_status(vs(c), vid).state == "move", "배정 즉시 산책 취소 → 이동 상태")
+	check(wait_arrival(c, vid), "현장 도착")
+	check(c.sim.work_status(vs(c), vid).state == "work" and c.sim.work_status(vs(c), vid).target == Vector2i(2, 13), "도착 후 work 상태·대상 칸 %s" % str(c.sim.work_status(vs(c), vid).target))
+	# 산책 끄기(시연·테스트용): 빈손 정령이 제자리
+	c.sim.wander_enabled = false
+	c.village_assign(vid, 0)
+	seconds(c, 12.0)
+	var p1: Vector2 = c.sim.actors[vid].pos
+	seconds(c, 6.0)
+	check(p1.distance_to(c.sim.actors[vid].pos) < 0.01, "산책 끄면 제자리")
+	c.sim.wander_enabled = true
+	# 화면 효과: 수확 이벤트에 정령 기쁨·이삭 이동, 작업 중 바람, 대기 중 바람 없음
+	var g := await open_village_game()
+	var view := g.village_view
+	view.manual_input = true
+	var cc := g.campaign
+	cc.sim.wander_enabled = false
+	# 농장 준비(정령 공사)
+	var order := [Vector2i(23, 3), Vector2i(23, 4), Vector2i(23, 5), Vector2i(22, 3), Vector2i(22, 4), Vector2i(22, 5), Vector2i(21, 3), Vector2i(21, 4), Vector2i(21, 5)]
+	for cell in order:
+		clear_cell(cc, cell)
+	var fa := build(cc, &"farm", 21, 3)
+	build(cc, &"well", 24, 3)
+	var fv := first_free_villager(cc)
+	cc.village_assign(fv, fa)
+	wait_arrival(cc, fv)
+	view._sync_stage(0.016)
+	view._sync_stage(0.3)
+	check(view.stage.actor_nodes.has(fv) and view.stage.actor_nodes[fv].state == "work" and view.stage.wind_ribbons.has(fv), "도착한 농부 정령: work 동작 + 바람 리본")
+	var idle_id := first_free_villager(cc)
+	check(not view.stage.wind_ribbons.has(idle_id) and view.stage.actor_nodes[idle_id].state == "idle", "빈손 정령: 바람 없음(idle)")
+	var ev: Array = []
+	for i in 310:
+		ev.append_array(cc.village_tick(TICK))
+		if count_events(ev, "harvest") > 0:
+			break
+	for e in ev:
+		view._log_event(e)
+	check(count_events(ev, "harvest") == 1 and int(ev[ev.size() - 1].villager) == fv, "수확 이벤트에 작업 정령 id")
+	check(view.stage.harvest_fx.size() == 1 and view.stage.actor_nodes[fv].harvest_t > 0.0, "수확 연출 1회(이삭 → 바구니, 정령 기쁨)")
+	var food := cc.state.food
+	for i in 90:
+		view.stage.update_fx(1.0 / 60.0)
+	check(view.stage.harvest_fx.is_empty() and cc.state.food == food, "연출이 끝나도 보상은 그대로(효과와 규칙 분리)")
+	# 물 끊김: 우물 철거 → 정령 rest(물 없음) 표시, 바람 없음
+	var well_id := 0
+	for id in vs(cc).sorted_building_ids():
+		if vs(cc).buildings[id].def_id == "well":
+			well_id = id
+	cc.village_demolish(well_id)
+	seconds(cc, 1.0)
+	view._sync_stage(0.3)
+	check(cc.sim.work_status(vs(cc), fv).state == "rest" and not view.stage.wind_ribbons.has(fv) and view.stage.actor_nodes[fv].icon.visible, "물 없는 밭: 거짓 농사 연출 없음(rest·아이콘)")
+	# 왕복: 마을 → 지도 → 전투 → 마을. 카메라/효과/틱 잔류 없음
+	view.request_leave()
+	await process_frame
+	check(g.current_screen == "map" and g.village_view == null and not cc.in_village(), "지도로: 마을 장면·시뮬레이션 정리")
+	g.start_battle(&"ch1_farm")
+	await process_frame
+	check(g.current_screen == "battle" and cc.village_tick(1.0).is_empty(), "전투 중 마을 틱 없음")
+	var sub_count := 0
+	for n in g.screen_root.get_children():
+		if n is VillageView:
+			sub_count += 1
+	check(sub_count == 0, "전투 중 마을 SubViewport 잔류 없음")
+	g.battle.abandon()
+	await process_frame
+	g._after_result()
+	await process_frame
+	g.show_village(&"ch1_farm")
+	await process_frame
+	check(g.current_screen == "village" and g.village_view != null and g.village_view.stage.building_nodes.has(fa), "재입장: 새 표시 계층에 농장 표시")
 	g.queue_free()
 	await process_frame

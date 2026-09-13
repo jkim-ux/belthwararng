@@ -395,6 +395,33 @@ func village_move(id: int, x: int, y: int, rot: int) -> Dictionary:
 	_commit("village_move", candidate, result)
 	return result
 
+## 밭 정돈 부탁(HWR-006): 빈손 정령 1명에게 장애물 정돈을 예약한다. {ok, status, reason, saved, villager}
+func village_request_clear(obstacle_id: String) -> Dictionary:
+	var g := _village_guard()
+	if not g.ok:
+		g.villager = 0
+		return g
+	var candidate := state.duplicate_state()
+	var r := sim.request_clear(candidate.village(active_village), obstacle_id)
+	if not r.ok:
+		return {"ok": false, "status": "rejected", "reason": r.reason, "saved": false, "villager": 0}
+	var result := {"ok": true, "status": "", "reason": "", "saved": false, "kind": "village_request_clear", "villager": r.villager}
+	_commit("village_request_clear", candidate, result)
+	return result
+
+## 정돈 부탁 취소: 진행량은 남는다. {ok, status, reason, saved}
+func village_cancel_clear(obstacle_id: String) -> Dictionary:
+	var g := _village_guard()
+	if not g.ok:
+		return g
+	var candidate := state.duplicate_state()
+	var r := sim.cancel_clear(candidate.village(active_village), obstacle_id)
+	if not r.ok:
+		return {"ok": false, "status": "rejected", "reason": r.reason, "saved": false}
+	var result := {"ok": true, "status": "", "reason": "", "saved": false, "kind": "village_cancel_clear"}
+	_commit("village_cancel_clear", candidate, result)
+	return result
+
 func village_assign(villager_id: int, building_id: int) -> Dictionary:
 	var g := _village_guard()
 	if not g.ok:

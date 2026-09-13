@@ -141,7 +141,7 @@ func stagger(e: BattleActor) -> void:
 	info.direction = 1
 	e.receive_hit(info)
 
-## HWR-005: 정비 = 마을에 들어가 고정 복구 현장을 설치하고 플레이어 작업으로 완공. 군자금 40 + 목재 10 + 석재 5.
+## HWR-005/006: 정비 = 마을에 들어가 고정 복구 현장을 설치하고 정령 공사로 완공. 군자금 40 + 목재 10 + 석재 5.
 func repair(c: CampaignController, site_id: StringName) -> Dictionary:
 	return build_in_village(c, site_id, &"repair")
 
@@ -160,13 +160,16 @@ func build_in_village(c: CampaignController, site_id: StringName, def_id: String
 	if not r.ok or not r.saved:
 		c.leave_village()
 		return r
-	var b := c.active_village_state().building(r.id)
-	c.sim.player_cell = c.sim.work_cell(b)
-	c.sim.player_work = {"kind": "building", "id": r.id}
-	var def := c.data.building(def_id)
-	for i in int(def.work_required / VillageSim.PLAYER_BUILD_RATE / VillageSim.TICK) + 1:
+	# HWR-006: 빈손 정령을 배정해 도착 후 초당 5 로 공사(플레이어 직접 작업 없음). 이동 시간을 포함해 최대 60초 틱.
+	var vid := c.active_village_state().first_idle_villager()
+	var a := c.village_assign(vid, r.id)
+	if not a.ok:
+		c.leave_village()
+		return {"ok": false, "saved": false, "reason": "배정 실패: %s" % a.reason}
+	for i in int(60.0 / VillageSim.TICK):
 		c.village_tick(VillageSim.TICK)
-	c.sim.player_work = {}
+		if c.active_village_state().building(r.id).state == "complete":
+			break
 	var complete: bool = c.active_village_state().building(r.id).state == "complete"
 	var lv := c.leave_village()
 	return {"ok": complete, "saved": complete and lv.ok, "reason": "" if complete else "미완공"}

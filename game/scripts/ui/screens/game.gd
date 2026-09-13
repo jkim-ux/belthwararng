@@ -22,6 +22,9 @@ var village_view: VillageView = null
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
+	# HWR-005 R1: 루트 Control 의 기본 mouse_filter(STOP)가 빈 마을 영역의 마우스 이동·클릭을 소비해 VillageView._unhandled_input 에
+	# 닿지 않았다. 루트는 입력을 가로채지 않는 컨테이너로 두고, 실제 버튼·패널·모달(자식 Control)만 입력을 소비한다.
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ui_theme = Theme.new()
 	ui_theme.default_font = UiFont.FONT
 	ui_theme.default_font_size = 16

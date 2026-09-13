@@ -6,23 +6,26 @@ extends RefCounted
 ## 경제 시간은 10Hz 고정 틱(TICK)으로만 진행하며 프레임률과 무관하다.
 
 const TICK := 0.1
-const PLAYER_BUILD_RATE := 5.0      ## 플레이어 E 공사 작업량/초
-const VILLAGER_BUILD_RATE := 1.0    ## 배정 주민 공사 작업량/초
+## HWR-006: 플레이어가 직접 공사/개간/농사하지 않는다(배치하고 정령에게 부탁). 주민 공사 속도 1 → 5 작업량/초(의도적 수치 변경).
+const VILLAGER_BUILD_RATE := 5.0    ## 배정 주민 공사 작업량/초
+const VILLAGER_CLEAR_RATE := 1.0    ## 정돈 작업량/초 (덤불 1·나무 2·바위 3초 유지)
 const VILLAGER_SPEED := 3.0         ## 칸/초
 const PATH_RETRY_SECONDS := 1.0
+const WANDER_RADIUS := 2            ## 유휴 산책 반경(시작 칸 기준, 체비쇼프)
+const WANDER_WAIT := 3.0            ## 산책 사이 대기(초, 주민마다 0~2초 가산)
 const DIRS: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
 
 var data: CampaignData
 var template: VillageTemplate
 var site_id: StringName
 
-## 실행 중 주민: id -> {pos: Vector2(칸 단위, 중심 = 칸 + 0.5), path: Array, target: Vector2i, arrived: bool, retry: float}
+## 실행 중 주민: id -> {pos: Vector2(칸 단위, 중심 = 칸 + 0.5), path: Array, target: Vector2i, arrived: bool, retry: float,
+##   blocked: bool(경로 없음), idle_wait: float, wander_n: int, wander_target: Vector2i}
 var actors: Dictionary = {}
 var player_cell: Vector2i = Vector2i(-1, -1)
-## 이번 틱의 플레이어 E 작업 대상: {} 또는 {"kind": "obstacle", "id": String} / {"kind": "building", "id": int}
-var player_work: Dictionary = {}
 var water: Dictionary = {}           ## 마지막 틱의 물 연결망 계산 결과
 var elapsed: float = 0.0             ## 이 마을에서 진행한 경제 시간(초)
+var wander_enabled: bool = true      ## 유휴 정령 산책(표시가 아니라 실제 위치 이동)
 
 func _init(p_data: CampaignData, p_site_id: StringName) -> void:
 	data = p_data
@@ -464,17 +467,44 @@ func assign_villager(vs: VillageState, villager_id: int, building_id: int) -> Di
 		_reset_actor(prev)
 	return {"ok": true, "reason": ""}
 
+## 밭 정돈 부탁: 빈손 주민 1명(가장 낮은 ID)에게 장애물 정돈을 예약한다. {ok, reason, villager}
+func request_clear(vs: VillageState, obstacle_id: String) -> Dictionary:
+	var cell := obstacle_cell_of(obstacle_id)
+	if cell.x < 0 or not template.in_bounds(cell) or template.obstacle_at(cell) == ".":
+		return {"ok": false, "reason": "정돈할 대상이 아님", "villager": 0}
+	if not has_obstacle(vs, cell):
+		return {"ok": false, "reason": "이미 정돈된 자리", "villager": 0}
+	if vs.worker_of_obstacle(obstacle_id) != 0:
+		return {"ok": false, "reason": "이미 부탁한 자리 (%s)" % String(vs.villager(vs.worker_of_obstacle(obstacle_id)).name), "villager": 0}
+	var vid := vs.first_idle_villager()
+	if vid == 0:
+		return {"ok": false, "reason": "빈손 정령이 없음 — 건물 패널에서 배정을 해제하거나 다른 부탁을 취소", "villager": 0}
+	vs.assign_clear(vid, obstacle_id)
+	_reset_actor(vid)
+	return {"ok": true, "reason": "", "villager": vid}
+
+## 정돈 부탁 취소: 진행량(clearing)은 남긴다.
+func cancel_clear(vs: VillageState, obstacle_id: String) -> Dictionary:
+	var vid := vs.worker_of_obstacle(obstacle_id)
+	if vid == 0:
+		return {"ok": false, "reason": "부탁한 정령 없음"}
+	vs.unassign(vid)
+	_reset_actor(vid)
+	return {"ok": true, "reason": ""}
+
 func invalidate_paths() -> void:
 	for a in actors.values():
 		a.path = []
 		a.arrived = false
 		a.retry = 0.0
+		a.blocked = false
 
 func _reset_actor(villager_id: int) -> void:
 	if actors.has(villager_id):
 		actors[villager_id].path = []
 		actors[villager_id].arrived = false
 		actors[villager_id].retry = 0.0
+		actors[villager_id].blocked = false
 
 # ------------------------------------------------------------------ 물 연결망
 
@@ -558,7 +588,8 @@ func is_farm_watered(id: int) -> bool:
 # ------------------------------------------------------------------ 주민 실행 상태
 
 func spawn_actor(villager_id: int, cell: Vector2i) -> void:
-	actors[villager_id] = {"pos": Vector2(cell) + Vector2(0.5, 0.5), "path": [], "target": Vector2i(-1, -1), "arrived": false, "retry": 0.0}
+	actors[villager_id] = {"pos": Vector2(cell) + Vector2(0.5, 0.5), "path": [], "target": Vector2i(-1, -1), "arrived": false, "retry": 0.0,
+		"blocked": false, "idle_wait": WANDER_WAIT + float(villager_id % 3), "wander_n": 0, "wander_target": cell}
 
 ## 마을 진입 시 주민을 시작 칸 주변에 세운다(저장하지 않는 실행 값).
 func spawn_all(vs: VillageState) -> void:
@@ -605,7 +636,9 @@ func _move_actor(a: Dictionary, g: PackedByteArray, target: Vector2i, dt: float)
 		a.retry = PATH_RETRY_SECONDS
 		a.path = find_path(g, cur, target)
 		if a.path.is_empty():
+			a.blocked = true
 			return
+		a.blocked = false
 	var next: Vector2i = a.path[0]
 	if grid_blocked(g, next):
 		a.path = []
@@ -638,49 +671,54 @@ func player_near_cell(c: Vector2i) -> bool:
 
 ## 경제 1틱(0.1초). 후보 상태 cs/vs 를 갱신하고 완료 이벤트 목록을 돌려준다.
 ## 이벤트: {kind: "obstacle_cleared"|"construction_complete"|"harvest"|"production", ...}
+## HWR-006: 플레이어 직접 작업은 없다. 정돈(clear)·공사(build)·농사·생산 모두 배정 주민이 실제 작업 위치에 도착한 뒤 진행한다.
 func tick(cs: CampaignState, vs: VillageState) -> Array:
 	var dt := TICK
 	var events: Array = []
 	elapsed += dt
 	var g := blocked_grid(vs)
 	water = compute_water(vs)
-	# --- 플레이어 작업
-	var player_farm := 0
-	if not player_work.is_empty():
-		if player_work.kind == "obstacle":
-			var oid: String = player_work.id
-			var cell := _obstacle_cell(oid)
-			if cell.x >= 0 and has_obstacle(vs, cell) and player_near_cell(cell):
-				var ch := template.obstacle_at(cell)
-				var w := float(vs.clearing.get(oid, 0.0)) + dt
-				if w + 1e-6 >= VillageTemplate.obstacle_work(ch):
-					vs.clearing.erase(oid)
-					vs.cleared.append(oid)
-					var reward := VillageTemplate.obstacle_reward(ch)
-					cs.wood += int(reward.wood)
-					cs.stone += int(reward.stone)
-					events.append({"kind": "obstacle_cleared", "id": oid, "cell": cell, "obstacle": ch, "wood": int(reward.wood), "stone": int(reward.stone)})
-					g = blocked_grid(vs)
-				else:
-					vs.clearing[oid] = w
-		elif player_work.kind == "building":
-			var bid: int = int(player_work.id)
-			if vs.buildings.has(bid) and player_near_building(vs.buildings[bid]):
-				var b: Dictionary = vs.buildings[bid]
-				if b.state == "construction":
-					b.work_done = float(b.work_done) + PLAYER_BUILD_RATE * dt
-				elif def_of(b).kind == &"farm":
-					player_farm = bid
 	# --- 주민 이동·작업
-	var farm_workers := {}      # 농장 id -> true (도착한 농부)
-	var producer_workers := {}  # 생산 시설 id -> true
+	var farm_workers := {}      # 농장 id -> 주민 id (도착한 농부)
+	var producer_workers := {}  # 생산 시설 id -> 주민 id
 	for vid in vs.sorted_villager_ids():
 		var vl: Dictionary = vs.villagers[vid]
 		var a := _ensure_actor(vs, vid, template.spawn)
-		if vl.job_building == 0 or not vs.buildings.has(vl.job_building):
-			if vl.job_building != 0:
+		if String(vl.job_kind) == "clear":
+			var oid := String(vl.job_obstacle)
+			var cell := obstacle_cell_of(oid)
+			if cell.x < 0 or not has_obstacle(vs, cell):
 				vs.unassign(vid)
-			_move_actor(a, g, template.spawn, dt)
+				_reset_actor(vid)
+				continue
+			var stand := _clear_stand_cell(g, cell, a)
+			if stand.x < 0:
+				# 인접한 통행 칸이 없음: 제자리에서 대기(막힘 표시)
+				a.blocked = true
+				a.arrived = false
+				continue
+			_move_actor(a, g, stand, dt)
+			if not a.arrived:
+				continue
+			var ch := template.obstacle_at(cell)
+			var w := float(vs.clearing.get(oid, 0.0)) + VILLAGER_CLEAR_RATE * dt
+			if w + 1e-6 >= VillageTemplate.obstacle_work(ch):
+				vs.clearing.erase(oid)
+				vs.cleared.append(oid)
+				var reward := VillageTemplate.obstacle_reward(ch)
+				cs.wood += int(reward.wood)
+				cs.stone += int(reward.stone)
+				events.append({"kind": "obstacle_cleared", "id": oid, "cell": cell, "obstacle": ch, "wood": int(reward.wood), "stone": int(reward.stone), "villager": vid})
+				vs.unassign(vid)
+				_reset_actor(vid)
+				g = blocked_grid(vs)
+			else:
+				vs.clearing[oid] = w
+			continue
+		if vl.job_building == 0 or not vs.buildings.has(vl.job_building):
+			if vl.job_building != 0 or String(vl.job_kind) != "":
+				vs.unassign(vid)
+			_wander(a, g, vid, dt)
 			continue
 		var b: Dictionary = vs.buildings[vl.job_building]
 		var target := work_cell(b)
@@ -692,9 +730,9 @@ func tick(cs: CampaignState, vs: VillageState) -> Array:
 				if b.state == "construction":
 					b.work_done = float(b.work_done) + VILLAGER_BUILD_RATE * dt
 			"farm":
-				farm_workers[vl.job_building] = true
+				farm_workers[vl.job_building] = vid
 			"lumber", "quarry":
-				producer_workers[vl.job_building] = true
+				producer_workers[vl.job_building] = vid
 	# --- 완공
 	for id in vs.sorted_building_ids():
 		var b: Dictionary = vs.buildings[id]
@@ -735,13 +773,13 @@ func tick(cs: CampaignState, vs: VillageState) -> Array:
 			continue
 		if not is_farm_watered(id):
 			continue
-		if not (farm_workers.has(id) or player_farm == id):
+		if not farm_workers.has(id):
 			continue
 		b.progress = float(b.progress) + dt
 		if float(b.progress) + 1e-6 >= def.cycle_seconds:
 			b.progress = 0.0
 			cs.food += def.produce_amount
-			events.append({"kind": "harvest", "id": id, "food": def.produce_amount})
+			events.append({"kind": "harvest", "id": id, "food": def.produce_amount, "villager": int(farm_workers[id])})
 	# --- 벌목·채석
 	for id in vs.sorted_building_ids():
 		var b: Dictionary = vs.buildings[id]
@@ -763,16 +801,111 @@ func tick(cs: CampaignState, vs: VillageState) -> Array:
 				&"wood": cs.wood += amount
 				&"stone": cs.stone += amount
 				&"food": cs.food += amount
-			events.append({"kind": "production", "id": id, "resource": String(def.produce_kind), "amount": amount, "fed": int(b.fed)})
+			events.append({"kind": "production", "id": id, "resource": String(def.produce_kind), "amount": amount, "fed": int(b.fed), "villager": int(producer_workers[id])})
 			b.progress = 0.0
 			b.fed = -1
 	return events
 
-func _obstacle_cell(oid: String) -> Vector2i:
+## 장애물 ID("ob_x_y") → 칸. 형식이 아니면 (-1,-1)
+static func obstacle_cell_of(oid: String) -> Vector2i:
 	var parts := oid.split("_")
-	if parts.size() != 3 or not parts[1].is_valid_int() or not parts[2].is_valid_int():
+	if parts.size() != 3 or parts[0] != "ob" or not parts[1].is_valid_int() or not parts[2].is_valid_int():
 		return Vector2i(-1, -1)
 	return Vector2i(int(parts[1]), int(parts[2]))
+
+const DIRS8: Array[Vector2i] = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1), Vector2i(1, 1), Vector2i(-1, 1), Vector2i(1, -1), Vector2i(-1, -1)]
+
+## 정돈 작업 위치: 장애물에 인접(8방향, 상하좌우 우선)한 통행 칸 중 주민이 실제로 갈 수 있는 가장 가까운 칸. 없으면 (-1,-1).
+## 이미 유효한 목표에 있으면 유지한다(매 틱 흔들리지 않음). 빽빽한 들판은 바깥 가장자리부터 정돈해야 한다.
+func _clear_stand_cell(g: PackedByteArray, cell: Vector2i, a: Dictionary) -> Vector2i:
+	var cur := actor_cell(a)
+	var cands: Array[Vector2i] = []
+	for d in DIRS8:
+		var n: Vector2i = cell + d
+		if not grid_blocked(g, n):
+			cands.append(n)
+	if cands.is_empty():
+		return Vector2i(-1, -1)
+	if cands.has(a.target) and (a.arrived or not a.path.is_empty() or cur == a.target):
+		return a.target
+	if cands.has(cur):
+		return cur
+	var reach := flood(g, cur)
+	var best := Vector2i(-1, -1)
+	var best_len := 1 << 30
+	for n in cands:
+		if not reach.has(n):
+			continue
+		var l := path_from_flood(reach, cur, n).size()
+		if l < best_len:
+			best_len = l
+			best = n
+	if best.x < 0:
+		return cands[0]   # 지금은 못 가지만 통행 칸은 있음 → 경로 재시도(막힘 표시)
+	return best
+
+## 유휴 산책: 시작 칸 주변 WANDER_RADIUS 안의 도달 가능한 칸을 결정적으로 골라 걷고, 사이사이 잠깐 쉰다.
+func _wander(a: Dictionary, g: PackedByteArray, vid: int, dt: float) -> void:
+	var home := template.spawn
+	if not wander_enabled:
+		_move_actor(a, g, a.wander_target, dt)
+		return
+	var at_target: bool = actor_cell(a) == a.wander_target and a.path.is_empty()
+	if at_target or a.blocked:
+		a.arrived = true
+		a.idle_wait = float(a.idle_wait) - dt
+		if a.idle_wait > 0.0:
+			return
+		a.idle_wait = WANDER_WAIT + float(vid % 3)
+		var cands: Array[Vector2i] = []
+		var reach := flood(g, actor_cell(a))
+		for dy in range(-WANDER_RADIUS, WANDER_RADIUS + 1):
+			for dx in range(-WANDER_RADIUS, WANDER_RADIUS + 1):
+				var c := home + Vector2i(dx, dy)
+				if c != actor_cell(a) and reach.has(c):
+					cands.append(c)
+		if cands.is_empty():
+			return
+		a.wander_n = int(a.wander_n) + 1
+		a.wander_target = cands[(vid * 7 + int(a.wander_n) * 3) % cands.size()]
+		a.blocked = false
+	_move_actor(a, g, a.wander_target, dt)
+
+## 주민의 화면 상태: {state: "idle"|"move"|"work"|"blocked"|"rest", reason: String, target: Vector2i(작업 대상 칸, 없으면 -1)}
+## 표시 계층은 이 값으로 동작을 고르며, 여기서 참이 아닌 작업(물 없는 밭 등)은 work 로 보고하지 않는다.
+func work_status(vs: VillageState, vid: int) -> Dictionary:
+	var out := {"state": "idle", "reason": "", "target": Vector2i(-1, -1)}
+	if not actors.has(vid) or not vs.villagers.has(vid):
+		return out
+	var a: Dictionary = actors[vid]
+	var vl: Dictionary = vs.villagers[vid]
+	var kind := String(vl.job_kind)
+	if kind == "":
+		out.state = "move" if not a.path.is_empty() else "idle"
+		return out
+	if kind == "clear":
+		out.target = obstacle_cell_of(String(vl.job_obstacle))
+	elif vs.buildings.has(vl.job_building):
+		var b: Dictionary = vs.buildings[vl.job_building]
+		var cells := cells_of(b)
+		out.target = cells[cells.size() / 2] if not cells.is_empty() else Vector2i(-1, -1)
+	if bool(a.blocked):
+		out.state = "blocked"
+		out.reason = "길 막힘"
+		return out
+	if not bool(a.arrived):
+		out.state = "move"
+		return out
+	if kind == "farm" and vs.buildings.has(vl.job_building):
+		if not is_farm_watered(vl.job_building):
+			out.state = "rest"
+			out.reason = "물 없음"
+			return out
+	if kind == "build" and vs.buildings.has(vl.job_building) and vs.buildings[vl.job_building].state != "construction":
+		out.state = "idle"
+		return out
+	out.state = "work"
+	return out
 
 ## 농장 성장 단계 0(빈 밭/파종)·1·2, 수확 직전 3 (0~10/10~20/20~30초)
 static func growth_stage(b: Dictionary, def: BuildingDef) -> int:
@@ -780,23 +913,13 @@ static func growth_stage(b: Dictionary, def: BuildingDef) -> int:
 		return 0
 	return clampi(int(floor(float(b.progress) / (def.cycle_seconds / 3.0))), 0, 2)
 
-## 플레이어 인접 상호작용 대상 찾기: 8방향 안에서 가장 가까운 것(상하좌우가 대각선보다 우선), 같은 거리면 공사 현장/농장 우선.
-## {kind, id} 또는 {}
+## 플레이어 인접 상호작용 대상 찾기(E): 8방향 안에서 가장 가까운 것(상하좌우가 대각선보다 우선).
+## 같은 거리면 장애물(정돈 부탁)이 건물(선택)보다 우선. {kind: "obstacle", id: String, cell} / {kind: "building", id: int} / {}
 func interact_target(vs: VillageState) -> Dictionary:
 	if player_cell.x < 0:
 		return {}
 	var best := {}
 	var best_d := 99
-	for id in vs.sorted_building_ids():
-		var b: Dictionary = vs.buildings[id]
-		if b.state != "construction" and def_of(b).kind != &"farm":
-			continue
-		for c in cells_of(b):
-			var dx := absi(c.x - player_cell.x)
-			var dy := absi(c.y - player_cell.y)
-			if maxi(dx, dy) <= 1 and dx + dy < best_d:
-				best_d = dx + dy
-				best = {"kind": "building", "id": id}
 	for dy in range(-1, 2):
 		for dx in range(-1, 2):
 			var c := player_cell + Vector2i(dx, dy)
@@ -805,4 +928,12 @@ func interact_target(vs: VillageState) -> Dictionary:
 				if d < best_d:
 					best_d = d
 					best = {"kind": "obstacle", "id": VillageTemplate.obstacle_id(c), "cell": c}
+	for id in vs.sorted_building_ids():
+		var b: Dictionary = vs.buildings[id]
+		for c in cells_of(b):
+			var dx := absi(c.x - player_cell.x)
+			var dy := absi(c.y - player_cell.y)
+			if maxi(dx, dy) <= 1 and dx + dy < best_d:
+				best_d = dx + dy
+				best = {"kind": "building", "id": id}
 	return best

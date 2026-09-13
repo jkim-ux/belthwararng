@@ -7,7 +7,9 @@ extends RefCounted
 ## 건물 인스턴스: {id:int, def_id:String, x:int, y:int, rot:int, state:"construction"|"complete",
 ##   work_done:float, progress:float(농사/생산 유효 작업초), fed:int(-1 주기 미시작, 0 식량 없이 시작, 1 식량 소비),
 ##   house_returned:bool(주택 귀환 1회 기록)}
-## 주민: {id:int, name:String, job_kind:""|"build"|"farm"|"lumber"|"quarry", job_building:int(0 = 없음)}
+## 주민: {id:int, name:String, job_kind:""|"build"|"farm"|"lumber"|"quarry"|"clear", job_building:int(0 = 없음),
+##   job_obstacle:String("" = 없음. HWR-006 밭 정돈 부탁 대상 장애물 ID, job_kind "clear" 일 때만)}
+## job_kind 가 "" 이면 빈손(유휴)이다. 기존 저장(HWR-005)에는 job_obstacle 이 없으므로 "" 로 채운다.
 
 const INITIAL_VILLAGERS := 3
 const MAX_VILLAGERS := 7
@@ -118,24 +120,44 @@ static func from_dict(d: Variant, p_site_id: String, data: CampaignData, error: 
 				continue
 			var jb := int(e.get("job_building", 0))
 			var jk := String(e.get("job_kind", ""))
-			if jb != 0 and not v.buildings.has(jb):
+			var jo := String(e.get("job_obstacle", ""))
+			if jk == "clear":
 				jb = 0
-				jk = ""
-			v.villagers[id] = {"id": id, "name": String(e.get("name", "주민")), "job_kind": jk, "job_building": jb}
+				# 정돈 대상은 템플릿에 있는 장애물이고 아직 제거되지 않아야 한다
+				var tpl := data.village_template(StringName(p_site_id))
+				var oc := VillageSim.obstacle_cell_of(jo)
+				if tpl == null or oc.x < 0 or tpl.obstacle_at(oc) == "." or v.cleared.has(jo):
+					error.append("%s: 주민 %d 정돈 대상 %s 없음 → 해제" % [p_site_id, id, jo])
+					jk = ""
+					jo = ""
+			else:
+				jo = ""
+				if jb != 0 and not v.buildings.has(jb):
+					jb = 0
+					jk = ""
+				if jb == 0:
+					jk = ""
+			v.villagers[id] = {"id": id, "name": String(e.get("name", "주민")), "job_kind": jk, "job_building": jb, "job_obstacle": jo}
 			max_id = maxi(max_id, id)
 	if v.next_id <= max_id:
 		v.next_id = max_id + 1
-	# 한 건물에 주민 1명: 중복 배정은 뒤의 주민을 해제한다.
+	# 한 건물/장애물에 주민 1명: 중복 배정은 뒤의 주민을 해제한다.
 	var taken := {}
-	for id in v.villagers.keys():
+	for id in v.sorted_villager_ids():
 		var vl: Dictionary = v.villagers[id]
+		var key: Variant = null
 		if vl.job_building != 0:
-			if taken.has(vl.job_building):
+			key = vl.job_building
+		elif vl.job_obstacle != "":
+			key = vl.job_obstacle
+		if key != null:
+			if taken.has(key):
 				vl.job_building = 0
 				vl.job_kind = ""
+				vl.job_obstacle = ""
 				error.append("%s: 주민 %d 중복 배정 해제" % [p_site_id, id])
 			else:
-				taken[vl.job_building] = true
+				taken[key] = true
 	return v
 
 # ------------------------------------------------------------------ 조회
@@ -172,17 +194,39 @@ func sorted_villager_ids() -> Array:
 	ids.sort()
 	return ids
 
+## 빈손(유휴) 주민: 건물 배정도 정돈 부탁도 없는 주민
+static func is_idle(vl: Dictionary) -> bool:
+	return String(vl.job_kind) == ""
+
 func free_villager_count() -> int:
 	var n := 0
 	for v in villagers.values():
-		if v.job_building == 0:
+		if is_idle(v):
 			n += 1
 	return n
 
+## 가장 낮은 ID 의 빈손 주민(없으면 0)
+func first_idle_villager() -> int:
+	for id in sorted_villager_ids():
+		if is_idle(villagers[id]):
+			return id
+	return 0
+
 ## 건물에 배정된 주민 ID(없으면 0)
 func worker_of(building_id: int) -> int:
+	if building_id == 0:
+		return 0
 	for id in sorted_villager_ids():
 		if villagers[id].job_building == building_id:
+			return id
+	return 0
+
+## 장애물 정돈을 맡은 주민 ID(없으면 0)
+func worker_of_obstacle(obstacle_id: String) -> int:
+	if obstacle_id == "":
+		return 0
+	for id in sorted_villager_ids():
+		if String(villagers[id].job_obstacle) == obstacle_id:
 			return id
 	return 0
 
@@ -197,7 +241,7 @@ func add_villager() -> int:
 	var id := next_id
 	next_id += 1
 	var name: String = NAMES[(villagers.size() + (hash(site_id) % 3)) % NAMES.size()]
-	villagers[id] = {"id": id, "name": name, "job_kind": "", "job_building": 0}
+	villagers[id] = {"id": id, "name": name, "job_kind": "", "job_building": 0, "job_obstacle": ""}
 	return id
 
 func add_building(def: BuildingDef, x: int, y: int, rot: int, complete: bool = false) -> int:
@@ -217,6 +261,7 @@ func remove_building(id: int) -> void:
 		if v.job_building == id:
 			v.job_building = 0
 			v.job_kind = ""
+			v.job_obstacle = ""
 
 func assign(villager_id: int, building_id: int, job_kind: String) -> void:
 	# 같은 건물의 기존 주민은 해제(한 현장 주민 최대 1명)
@@ -224,11 +269,26 @@ func assign(villager_id: int, building_id: int, job_kind: String) -> void:
 		if v.job_building == building_id and v.id != villager_id:
 			v.job_building = 0
 			v.job_kind = ""
+			v.job_obstacle = ""
 	var vl: Dictionary = villagers[villager_id]
 	vl.job_building = building_id
 	vl.job_kind = job_kind
+	vl.job_obstacle = ""
+
+## 밭 정돈 부탁: 주민 1명이 장애물 1개를 맡는다(같은 대상의 기존 주민은 해제).
+func assign_clear(villager_id: int, obstacle_id: String) -> void:
+	for v in villagers.values():
+		if String(v.job_obstacle) == obstacle_id and v.id != villager_id:
+			v.job_building = 0
+			v.job_kind = ""
+			v.job_obstacle = ""
+	var vl: Dictionary = villagers[villager_id]
+	vl.job_building = 0
+	vl.job_kind = "clear"
+	vl.job_obstacle = obstacle_id
 
 func unassign(villager_id: int) -> void:
 	if villagers.has(villager_id):
 		villagers[villager_id].job_building = 0
 		villagers[villager_id].job_kind = ""
+		villagers[villager_id].job_obstacle = ""
