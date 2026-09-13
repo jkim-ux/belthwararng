@@ -288,3 +288,8 @@ python3 ../tools/pack_mjpeg_avi.py /tmp/hwr006_frames 12 ../reports/HWR-006_farm
 ```sh
 godot --headless --path . -s tests/run_garden_art_tests.gd
 ```
+
+
+### HWR-006 나무 디테일 교체
+
+마을의 나무는 새 단독 콘셉트에 맞춘 개별 잎·잎맥·연속 수피 모델을 사용한다. **`assets/garden_v1/scenes/tree_review.tscn` → F6**으로 같은 나무를 단독으로 확인할 수 있다(왼쪽 드래그 회전, 휠 확대). 일반 마을은 시작 화면의 **마을 바로 테스트**로 진입한다. 자세한 원본과 검토 이미지는 [에셋 안내](assets/garden_v1/README.md)에 있다.

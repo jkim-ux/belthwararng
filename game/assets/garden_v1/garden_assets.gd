@@ -25,41 +25,43 @@ static var _material_cache: Dictionary = {}
 static var _primitives: Dictionary = {}
 var _surface: SurfaceTool
 var _variant: int = 0
-var _crown_lobes: Array[Vector3] = []
 
-static func material(alpha: float = 1.0, tint: Color = Color.WHITE) -> StandardMaterial3D:
-	var key := "%s|%.2f" % [tint.to_html(), alpha]
+static func material(alpha: float = 1.0, tint: Color = Color.WHITE, double_sided: bool = false) -> StandardMaterial3D:
+	var key := "%s|%.2f|%s" % [tint.to_html(), alpha, double_sided]
 	if _material_cache.has(key): return _material_cache[key]
 	var m := StandardMaterial3D.new()
 	m.vertex_color_use_as_albedo = true
 	m.albedo_color = Color(tint.r, tint.g, tint.b, alpha)
-	m.roughness = 0.92
+	m.roughness = 0.84 if double_sided else 0.92
+	if double_sided: m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	if alpha < 0.999:
 		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_material_cache[key] = m
 	return m
 
 static func make(id: String, variant: int = 0, alpha: float = 1.0, tint: Color = Color.WHITE) -> MeshInstance3D:
-	var key := "%s/%d" % [id, posmod(variant, 3)]
+	var tree := id == "tree" or id == "flower_tree"
+	var key := "%s/%d" % ["detailed_tree" if tree else id, posmod(variant, 3)]
 	if not _cache.has(key):
-		var author := GardenAssets.new()
-		author._variant = posmod(variant, 3)
-		author._surface = SurfaceTool.new()
-		author._surface.begin(Mesh.PRIMITIVE_TRIANGLES)
-		author._build(id)
-		_cache[key] = author._surface.commit()
+		if tree:
+			_cache[key] = DetailedGardenTree.build(variant)
+		else:
+			var author := GardenAssets.new()
+			author._variant = posmod(variant, 3)
+			author._surface = SurfaceTool.new()
+			author._surface.begin(Mesh.PRIMITIVE_TRIANGLES)
+			author._build(id)
+			_cache[key] = author._surface.commit()
 	var node := MeshInstance3D.new()
 	node.name = "Garden_" + id
 	node.mesh = _cache[key]
-	node.material_override = material(alpha, tint)
+	node.material_override = material(alpha, tint, tree)
 	node.set_meta("garden_asset", id)
 	node.set_meta("base_material", node.material_override)
 	return node
 
 func _build(id: String) -> void:
 	match id:
-		"tree": _tree(false)
-		"flower_tree": _tree(true)
 		"rock": _rocks()
 		"fence": _fence()
 		"planter": _planter()
@@ -191,73 +193,6 @@ func _flower(pos: Vector3, size: float = 0.13, lavender: bool = false) -> void:
 	_blob(pos + Vector3(0, 0, size * 0.15), Vector3.ONE * size * 0.25, Color("dbc274"))
 
 # ------------------------------------------------------------------ Tree, rock and garden border
-
-func _tree(blossom: bool) -> void:
-	var shift := (_variant - 1) * 0.07
-	_beam(Vector3(0, 0, 0), Vector3(-0.09, 0.8, 0), 0.22, WOOD_DARK, 0.15)
-	_beam(Vector3(-0.09, 0.7, 0), Vector3(0.12 + shift, 1.65, 0), 0.15, WOOD, 0.085)
-	for side in [-1.0, 1.0]:
-		_beam(Vector3(0, 0.75, 0), Vector3(side * 0.68, 1.5, 0.02), 0.1, WOOD, 0.035)
-		_beam(Vector3(0, 0.12, 0), Vector3(side * 0.35, 0.015, 0.2), 0.09, WOOD_DARK, 0.022)
-	for i in 4:
-		_beam(Vector3(-0.12 + i * 0.065, 0.2, 0.165), Vector3(-0.16 + i * 0.065, 0.66, 0.12), 0.012, WOOD_LIGHT)
-	# One smooth union surface avoids visible sphere intersections in the canopy.
-	_crown_lobes.clear()
-	for i in 9:
-		var a := i * 2.39996 + _variant * 0.37
-		var ring := 0.25 if i > 5 else 0.74
-		_crown_lobes.append(Vector3(cos(a) * ring, -0.22 + (i % 3) * 0.23, sin(a) * ring * 0.6))
-	_crown(Vector3(0, 1.94, 0))
-	for i in 8:
-		var a := float(i) * 2.4
-		_leaf(Vector3(cos(a) * 0.9, 1.58 + (i % 3) * 0.24, 0.4 + sin(a) * 0.3), 0.28, 0.12, a, LEAF_LIGHT)
-	if blossom:
-		for p in [Vector3(-0.65, 1.77, 0.8), Vector3(0.48, 2.22, 0.66), Vector3(0.77, 1.75, 0.71)]:
-			_flower(p, 0.13)
-
-func _crown_point(direction: Vector3) -> Vector3:
-	var radius := 0.38
-	for center in _crown_lobes:
-		var along := direction.dot(center)
-		var disc := 0.62 * 0.62 - center.length_squared() + along * along
-		if disc <= 0.0: continue
-		var r := along + sqrt(disc)
-		var h := maxf(0.13 - absf(radius - r), 0.0) / 0.13
-		radius = maxf(radius, r) + h * h * 0.0325
-	# Low-amplitude leaf irregularity, rather than separate bead-shaped bumps.
-	radius += 0.017 * sin(direction.x * 22.0 + _variant) * sin(direction.y * 19.0) * cos(direction.z * 21.0)
-	return direction * radius
-
-func _crown(origin: Vector3) -> void:
-	if not _primitives.has("canopy"):
-		var sphere := SphereMesh.new()
-		sphere.radius = 1.0
-		sphere.height = 2.0
-		sphere.radial_segments = 40
-		sphere.rings = 26
-		_primitives.canopy = sphere
-	var arrays: Array = _primitives.canopy.surface_get_arrays(0)
-	var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
-	var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
-	var points := PackedVector3Array()
-	var normals := PackedVector3Array()
-	var colors := PackedColorArray()
-	for v in vertices:
-		var direction := v.normalized()
-		var tangent := Vector3.UP.cross(direction).normalized()
-		if tangent.length_squared() < 0.1: tangent = Vector3.RIGHT
-		var bitangent := direction.cross(tangent)
-		var p := _crown_point(direction)
-		var pu := _crown_point((direction + tangent * 0.002).normalized())
-		var pv := _crown_point((direction + bitangent * 0.002).normalized())
-		points.append(origin + p)
-		normals.append((pu - p).cross(pv - p).normalized())
-		var variation := 0.12 + 0.11 * direction.y + 0.07 * sin(p.x * 23.0) * sin(p.z * 25.0 + p.y * 14.0)
-		colors.append(LEAF.lerp(LEAF_LIGHT, clampf(variation, 0.0, 0.4)).srgb_to_linear())
-	for i in indices:
-		_surface.set_color(colors[i])
-		_surface.set_normal(normals[i])
-		_surface.add_vertex(points[i])
 
 func _rocks() -> void:
 	for i in 4:

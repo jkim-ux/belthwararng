@@ -30,7 +30,8 @@ func _initialize() -> void:
 		for i in vertices.size():
 			if not vertices[i].is_finite() or not normals[i].is_finite(): valid = false
 		check(valid, "finite mesh attributes: " + id)
-		triangle_count += vertices.size() / 3
+		var index_array: PackedInt32Array = arrays[Mesh.ARRAY_INDEX] if arrays[Mesh.ARRAY_INDEX] != null else PackedInt32Array()
+		triangle_count += (index_array.size() if not index_array.is_empty() else vertices.size()) / 3
 		duplicate.free()
 		node.free()
 	print("Garden assets: %d types, %d source triangles, cold build %d ms" % [GardenAssets.IDS.size(), triangle_count, Time.get_ticks_msec() - start])

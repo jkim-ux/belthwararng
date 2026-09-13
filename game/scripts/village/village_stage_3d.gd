@@ -339,7 +339,10 @@ func _build_terrain() -> void:
 					if (x + y) % 2 == 0:
 						box(terrain_root, Vector3(CELL_W * 0.5, 0.02, 0.08), center + Vector3(0.0, -0.1, -0.15), Color(0.7, 0.85, 1.0))
 				"W":
-					_art(terrain_root, "tree", center, Vector3(0.47, 0.54, 0.38), x + y)
+					# Individual crowns need breathing room in the compressed depth view.
+					# Forest production tiles remain unchanged; this is decoration density only.
+					if y % 4 == 0 or template.terrain_at(c + Vector2i(0, -1)) != "W":
+						_art(terrain_root, "tree", center + Vector3(sin(y) * 0.13, 0, 0), Vector3.ONE * 0.46, x + y)
 				"Q", "#":
 					_art(terrain_root, "rock", center, Vector3(1.0, 1.0, 0.8), x + y)
 				"x":
@@ -561,7 +564,7 @@ func _apply_fade(n: Node, faded: bool) -> void:
 	for c in n.get_children():
 		if c is MeshInstance3D and c.has_meta("garden_asset"):
 			var base: StandardMaterial3D = c.get_meta("base_material")
-			c.material_override = GardenAssets.material(0.3, base.albedo_color) if faded else base
+			c.material_override = GardenAssets.material(0.3, base.albedo_color, base.cull_mode == BaseMaterial3D.CULL_DISABLED) if faded else base
 		elif c is MeshInstance3D and c.has_meta("color"):
 			var color: Color = c.get_meta("color")
 			c.material_override = mat(Color(color.r, color.g, color.b, 0.3 if faded else color.a))
