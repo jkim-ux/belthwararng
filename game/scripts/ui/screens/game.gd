@@ -2,11 +2,12 @@ class_name Game
 extends Control
 ## 게임 루트: 시작 화면 → 지도 → 마을(직접 걷고 건설) / 거점 전투 → 결과 → 합류 → 동료 선택. 수련장은 캠페인 저장과 분리된다.
 ## 화면은 코드로 만든 Control 이며 마우스와 키보드(방향키·Enter)로 조작한다.
-## 사용자 인자: --training / --demo (수련장 바로 시작), --save=경로 (다른 저장 파일 사용, 테스트용)
+## 사용자 인자: --training / --demo (수련장), --village-test (마을 테스트), --save=경로
 
 const BATTLE_SCENE := "res://scenes/battle.tscn"
 const BASE_ATTACK := 20.0
 const BASE_MAX_HP := 100
+const VILLAGE_TEST_SUFFIX := ".village_test"
 
 var campaign: CampaignController
 var ui_theme: Theme
@@ -19,6 +20,7 @@ var pending_join_companion: String = ""
 var last_result: Dictionary = {}
 var _pause_overlay: Control
 var village_view: VillageView = null
+var _campaign_before_village_test: CampaignController = null
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -44,13 +46,18 @@ func _ready() -> void:
 	add_child(overlay_root)
 	var save_path := CampaignController.DEFAULT_SAVE_PATH
 	var go_training := false
+	var go_village_test := false
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--save="):
 			save_path = a.trim_prefix("--save=")
 		elif a == "--training" or a == "--demo":
 			go_training = true
+		elif a == "--village-test":
+			go_village_test = true
 	campaign = CampaignController.new(save_path)
-	if go_training:
+	if go_village_test:
+		start_village_test()
+	elif go_training:
 		start_training()
 	else:
 		show_title()
@@ -132,6 +139,14 @@ func _background(title: String) -> VBoxContainer:
 # ------------------------------------------------------------------ 시작 화면
 
 func show_title() -> void:
+	if _campaign_before_village_test != null:
+		var leave := campaign.leave_village()
+		if not leave.ok:
+			if village_view != null:
+				village_view._say("테스트 마을 저장 실패: %s" % leave.reason)
+			return
+		campaign = _campaign_before_village_test
+		_campaign_before_village_test = null
 	_close_battle()
 	_clear_screen()
 	current_screen = "title"
@@ -142,6 +157,7 @@ func show_title() -> void:
 	var has_save := campaign.has_save()
 	v.add_child(_button("새 게임", _on_new_game))
 	v.add_child(_button("이어하기" + ("" if has_save else " (저장 없음)"), _on_continue, has_save))
+	v.add_child(_button("마을 바로 테스트 (전투 없이 · 별도 저장)", start_village_test))
 	v.add_child(_button("수련장 (프로필 비교 · 허수아비/근접병/강인병 표적 · 8스킬 · 저장 없음)", start_training))
 	v.add_child(HSeparator.new())
 	v.add_child(_label("전투: 방향키 이동, X 평타, C 점프, Space 회피, A 돌진베기, S 올려베기, D 내려베기, F 회전베기, Q 방어깨기, W 검기, E 흘려받기, R 일섬연무, Enter 문 이동/상자, Esc 일시정지.", 13, Color(0.75, 0.75, 0.75)))
@@ -149,6 +165,34 @@ func show_title() -> void:
 	v.add_child(_label("저장 파일: %s" % campaign.store.path, 12, Color(0.55, 0.55, 0.55)))
 	if campaign.last_load_message != "":
 		v.add_child(_label(campaign.last_load_message, 13, Color(1.0, 0.7, 0.6)))
+
+## 첫 농촌을 바로 열되 실제 캠페인 컨트롤러와 저장 파일은 보존한다.
+## 테스트 배치도 다음 실행에 이어서 확인할 수 있도록 별도 슬롯에 저장한다.
+func start_village_test() -> void:
+	if _campaign_before_village_test != null:
+		return
+	var test_campaign := CampaignController.new(campaign.store.path + VILLAGE_TEST_SUFFIX, campaign.data)
+	if test_campaign.has_save():
+		var loaded := test_campaign.continue_game()
+		if not loaded.ok:
+			campaign.last_load_message = "테스트 마을을 읽을 수 없음: %s" % loaded.error
+			show_title()
+			return
+	else:
+		# 첫 진입의 enter_village가 이 상태와 템플릿·정령·물자를 함께 원자 저장한다.
+		test_campaign.state = CampaignState.new_game(test_campaign.data)
+		var site := test_campaign.data.site(&"ch1_farm")
+		test_campaign.state.sites[String(site.id)]["liberated"] = true
+		test_campaign.state.sites[String(site.id)]["management"] = site.management_on_liberate
+		test_campaign.state.currency = 1000
+		test_campaign.state.wood = 300
+		test_campaign.state.stone = 300
+		test_campaign.state.food = 100
+	_campaign_before_village_test = campaign
+	campaign = test_campaign
+	if not show_village(&"ch1_farm", "테스트 마을 · 건설용 물자 제공 · 배치는 별도로 저장됩니다."):
+		_campaign_before_village_test.last_load_message = "테스트 마을 진입 실패: " + campaign.store.last_error
+		show_title()
 
 func _on_new_game() -> void:
 	if campaign.has_save():
@@ -276,29 +320,33 @@ func _retry_pending_from_map() -> void:
 # ------------------------------------------------------------------ 마을 (HWR-005)
 
 ## 해방된 마을에 들어간다. 첫 진입이면 초기화(템플릿·주민·일회성 물자)를 저장한다. 마을 장면은 VillageView 가 그린다.
-func show_village(site_id: StringName, message: String = "") -> void:
+func show_village(site_id: StringName, message: String = "") -> bool:
 	_close_battle()
 	_clear_screen()
 	var site := campaign.data.site(site_id)
 	if site == null or not site.is_village() or not campaign.state.is_liberated(site.id):
 		show_map("들어갈 수 없는 거점")
-		return
+		return false
 	var r := campaign.enter_village(site_id)
 	if not r.ok:
 		show_map("마을 진입 거부: %s" % r.reason)
-		return
+		return false
 	current_screen = "village"
 	var view := VillageView.new()
 	view.name = "Village"
+	view.test_mode = _campaign_before_village_test != null
 	view.setup(campaign, site_id)
 	view.leave_requested.connect(_leave_village)
 	screen_root.add_child(view)
 	village_view = view
 	var sup: Dictionary = r.get("supplies", {})
-	if not sup.is_empty():
+	if view.test_mode and message != "":
+		view._say(message)
+	elif not sup.is_empty():
 		view._say("복구 물자 지급: 목재 %d · 석재 %d · 식량 %d (1회)" % [int(sup.wood), int(sup.stone), int(sup.food)])
 	elif message != "":
 		view._say(message)
+	return true
 
 ## 이전 '관리' 진입점. 마을 장면으로 연결한다(초소 등 마을이 아니면 지도).
 func show_manage(site_id: StringName, message: String = "") -> void:
@@ -309,6 +357,9 @@ func _leave_village() -> void:
 	if not r.ok:
 		if village_view != null:
 			village_view._say("마을 저장 실패: %s" % r.reason)
+		return
+	if _campaign_before_village_test != null:
+		show_title()
 		return
 	show_map("마을에서 나왔다. 마을 시간은 다시 들어갈 때까지 멈춘다.")
 

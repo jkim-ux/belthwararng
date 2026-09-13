@@ -63,6 +63,7 @@ var _pending_overlay: Control = null
 var _help_open: bool = false
 var _side_sig: String = ""
 var manual_input: bool = false                    ## 테스트: 키 입력을 읽지 않는다
+var test_mode: bool = false                       ## 시작 화면의 별도 저장 테스트 마을
 var input_move: Vector2 = Vector2.ZERO             ## 테스트용 이동 입력
 var _last_mouse: Vector2 = Vector2(-1, -1)        ## 마지막 마우스 이벤트 위치(루트 Viewport 좌표, 창 크기 변환 반영)
 
@@ -717,7 +718,7 @@ func _draw_overlay() -> void:
 	if mode == "free":
 		var hint := ""
 		if on_entrance():
-			hint = "E: 지도로 나가기"
+			hint = "E: 테스트 종료" if test_mode else "E: 지도로 나가기"
 		else:
 			var tgt := s.interact_target(v)
 			if not tgt.is_empty():
@@ -801,7 +802,7 @@ func _build_hud() -> void:
 	th.add_child(_btn("관개 보기 (V)", func(): show_water = not show_water; _hud_dirty = true))
 	th.add_child(_btn("전체 보기 (M)", func(): overview = not overview; _update_camera(true); _hud_dirty = true))
 	th.add_child(_btn("도움말", func(): _help_open = not _help_open; _hud_dirty = true))
-	th.add_child(_btn("지도로", request_leave))
+	th.add_child(_btn("테스트 종료" if test_mode else "지도로", request_leave))
 	bottom_bar = PanelContainer.new()
 	bottom_bar.add_theme_stylebox_override("panel", _style(Color(0.09, 0.08, 0.11, 0.92)))
 	bottom_bar.position = Vector2(0, VIEW_H - BOTTOM_BAR)
@@ -884,7 +885,7 @@ func _refresh_hud() -> void:
 	var v := vs()
 	if v == null:
 		return
-	top_label.text = "%s   군자금 %d · 목재 %d · 석재 %d · 식량 %d   정령 %d/%d (빈손 %d)   관리도 %d" % [site.display_name, st.currency, st.wood, st.stone, st.food, v.villagers.size(), VillageState.MAX_VILLAGERS, v.free_villager_count(), st.management(site_id)]
+	top_label.text = "%s   군자금 %d · 목재 %d · 석재 %d · 식량 %d   정령 %d/%d (빈손 %d)   관리도 %d" % ["테스트" if test_mode else site.display_name, st.currency, st.wood, st.stone, st.food, v.villagers.size(), VillageState.MAX_VILLAGERS, v.free_villager_count(), st.management(site_id)]
 	msg_label.text = message
 	log_label.text = "\n".join(event_log)
 	help_panel.visible = _help_open
