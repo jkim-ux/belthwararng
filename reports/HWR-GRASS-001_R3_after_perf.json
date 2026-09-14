@@ -1,0 +1,38 @@
+{
+  "godot": "4.7.2-stable (official)",
+  "gpu": "Apple M4",
+  "renderer": "gl_compatibility",
+  "results": [
+    {
+      "buildings": 0,
+      "draw_calls": 291.0,
+      "frame_ms_avg": 5.37,
+      "frame_ms_p95": 6.53,
+      "frame_samples": 240,
+      "name": "enter_no_buildings",
+      "objects": 448.0,
+      "primitives": 1444912.0,
+      "texture_mem_mb": 66.1,
+      "video_mem_mb": 125.9,
+      "villagers": 3
+    },
+    {
+      "buildings": 4,
+      "draw_calls": 283.0,
+      "frame_ms_avg": 6.16,
+      "frame_ms_p95": 7.45,
+      "frame_samples": 240,
+      "name": "stand_3_9",
+      "objects": 423.0,
+      "primitives": 2401167.0,
+      "texture_mem_mb": 65.8,
+      "video_mem_mb": 127.4,
+      "villagers": 3
+    }
+  ],
+  "tag": "after",
+  "window": [
+    1280,
+    720
+  ]
+}
