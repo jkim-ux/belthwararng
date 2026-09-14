@@ -1,0 +1,124 @@
+{
+ "task": "HWR-GRASS-001 R3",
+ "source": {
+  "path": "/Users/JHKIM/Documents/GitHub/belthwararng/source_assets/environments/tiles/grass block 3d model.glb",
+  "bytes": 60363036,
+  "sha256": "2f9003c54d01f66b76af992fb2eb5f48449dfeac78a16e9c95b9c207beee7363",
+  "tris": 1929690,
+  "bake": "bake_grass_views.py top-down colour/height + front strip (see bake_meta.json)"
+ },
+ "tools": {
+  "numpy": "2.5.2",
+  "python": "3.12.9",
+  "blender_bake": "5.2.1 LTS"
+ },
+ "seed": 20260914,
+ "palette_srgb": {
+  "grass_target": [
+   0.47,
+   0.515,
+   0.385
+  ],
+  "grass_contrast_std": 0.032,
+  "dirt_target": [
+   0.6,
+   0.52,
+   0.4
+  ],
+  "dirt_contrast_std": 0.03,
+  "leaf_root": [
+   0.36,
+   0.45,
+   0.27
+  ],
+  "leaf_tip": [
+   0.52,
+   0.59,
+   0.36
+  ],
+  "clover_root": [
+   0.33,
+   0.44,
+   0.29
+  ],
+  "clover_tip": [
+   0.48,
+   0.57,
+   0.37
+  ]
+ },
+ "active": [
+  {
+   "file": "ground_grass.png",
+   "bytes": 1354593,
+   "sha256": "a8fa4bab5f5a6168154930cf00b383409fefbfaf882b5551284043434b82f324",
+   "size": [
+    1024,
+    1024
+   ],
+   "world_units_per_repeat": 3.0,
+   "colorspace": "sRGB",
+   "method": "toroidal splat of 1400 rotated/flipped patches (0.10-0.23 units) from both top-down bakes, mean/contrast remapped"
+  },
+  {
+   "file": "ground_dirt.png",
+   "bytes": 1528263,
+   "sha256": "6fe4a8db9cc871db80da7eea02b1c641e7b9002930797471f8abe507d61db770",
+   "size": [
+    1024,
+    1024
+   ],
+   "world_units_per_repeat": 2.0,
+   "colorspace": "sRGB",
+   "method": "toroidal splat of 26000 small patches from the dirt wall strip + 3.5% smooth mottling, mean/contrast remapped"
+  },
+  {
+   "file": "ground_variation.png",
+   "bytes": 15253,
+   "sha256": "d7d6641c95f997864ad59b2c8849173bde90491ab18826ed49ca13804e499a2f",
+   "size": [
+    256,
+    256
+   ],
+   "colorspace": "linear grey, mean 0.5",
+   "method": "sum of 10 tileable cosine waves (1-3 cycles)"
+  },
+  {
+   "file": "grass_clumps.glb",
+   "bytes": 34564,
+   "sha256": "aed97592380aeb0f4cbf34d3f759e7809df603be35d02fa60c6e98105df0ecb3",
+   "meshes": {
+    "clump_short": {
+     "tris": 112,
+     "verts": 140,
+     "height": 0.10134779661893845,
+     "radius": 0.14961014688014984
+    },
+    "clump_clover": {
+     "tris": 161,
+     "verts": 196,
+     "height": 0.07590833306312561,
+     "radius": 0.10540216416120529
+    },
+    "clump_edge": {
+     "tris": 144,
+     "verts": 180,
+     "height": 0.20119065046310425,
+     "radius": 0.2751792073249817
+    }
+   },
+   "texture": "clump_leaves 256x256 sRGB embedded, opaque, doubleSided",
+   "pivot": "clump base centre, y=0 ground, +Y up",
+   "material": "one shared material for all three meshes"
+  }
+ ],
+ "legacy_kept_for_reference": [
+  "grass_tile_a.glb",
+  "grass_tile_b.glb",
+  "grass_wind.gdshader",
+  "grass_tile.gd",
+  "grass_field.gd",
+  "grass_review.tscn"
+ ],
+ "seconds": 6.8
+}

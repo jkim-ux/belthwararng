@@ -27,3 +27,26 @@ Design notes
 - Source metallic/roughness map is flat (roughness 0.92 ± 0.04, metallic ≈ 0) so no ORM texture is shipped.
 - Decimation candidates (`Collapse` 40k/20k/10k) were rendered for comparison and rejected: UV islands of the
   Tripo atlas collapse into white seams and the turf turns into a lumpy shell (see reports/HWR-GRASS-001.md).
+
+# R3: static ground kit (HWR-GRASS-001 R3)
+
+The village no longer draws the tiles above. The ground is the flat terrain mesh with a shared world-space
+material (`game/assets/environment/grass/village_ground.gdshader`), and small leaf clumps sit along the edges
+(`grass_clumps.gd`). Both are fed by this kit, regenerated with
+
+```sh
+tools/environment/grass/run_ground.sh          # reuses build/*.npy from run.sh, bakes first if missing
+cd game && godot --headless --path . --import
+```
+
+| Output (`game/assets/environment/grass/ground/`) | Made from | Notes |
+| --- | --- | --- |
+| `ground_grass.png` 1024² sRGB | both top-down colour bakes | 1,400 rotated/flipped patches splatted on a toroidal canvas (seamless, isotropic), bright/dark outliers soft-limited, mean moved to a sage albedo (0.47, 0.515, 0.385), sRGB std ≈ 0.045. One repeat = 3.0 world units. |
+| `ground_dirt.png` 1024² sRGB | dirt-wall rows of the front strip bake | 26,000 small patches + 3.5 % smooth mottling, mean (0.60, 0.52, 0.40), std ≈ 0.03. One repeat = 2.0 units. |
+| `ground_variation.png` 256² linear grey | 10 tileable cosine waves | ±5 % brightness blotches sampled every 9 units (the "wide" colour variation, separate from the small texture). |
+| `grass_clumps.glb` | procedural blades/leaflets, leaf gradient from the remapped source colour | `clump_short` 112 tris h 0.10, `clump_clover` 161 tris h 0.076, `clump_edge` 144 tris h 0.20; one shared opaque material, embedded 256² texture, base at y = 0. Importer LODs disabled so the silhouettes never simplify. |
+| `ground_manifest.json` | — | sizes, SHA-256, palette, method per file, legacy list. |
+
+The build is deterministic (`SEED`): re-running produces byte-identical files. The tint/contrast knobs are the
+constants at the top of `build_ground_kit.py`; tune them there, not in the engine, so the manifest stays true.
+The R1/R2 tiles, wind shader and review scene stay in the folder for reference and are not loaded by the village.

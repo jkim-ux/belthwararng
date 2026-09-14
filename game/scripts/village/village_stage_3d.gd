@@ -87,8 +87,8 @@ func setup(p_template: VillageTemplate, p_data: CampaignData) -> void:
 		r.name = n
 		add_child(r)
 		set(n + "_root", r)
-	_build_backdrop()
 	_build_terrain()
+	_build_backdrop()   # after the terrain: the backdrop plane shares the ground material
 	_build_player()
 	cam_x = MAP_W_UNITS / 2.0
 	set_camera(cam_x, false, true)
@@ -285,10 +285,11 @@ const COL_FOREST := Color(0.3, 0.5, 0.3)
 const COL_ROCK := Color(0.6, 0.58, 0.55)
 const COL_DAM_SITE := Color(0.55, 0.64, 0.7)
 const COL_REPAIR_SITE := Color(0.62, 0.52, 0.42)
-## HWR-GRASS-001: baked grass tiles cover open ground, forest floor and the entrance; water, paths,
-## fields, rock and construction sites keep the flat terrain colour.
-const GRASS_TERRAIN := [".", "W", "e"]
-var grass: GrassField
+## HWR-GRASS-001 R3: the flat terrain mesh carries a shared ground material (world-space grass/dirt textures
+## blended by a path mask); sparse static leaf clumps sit along the edges. Fertile, river, cliff, rock and
+## the dam/repair sites keep their flat vertex colour through the mask. No wind, no per-cell colour.
+var ground: VillageGround
+var clumps: GrassClumps
 
 func _terrain_color(t: String) -> Color:
 	match t:
@@ -311,10 +312,7 @@ func _build_terrain() -> void:
 		for x in VillageTemplate.WIDTH:
 			var c := Vector2i(x, y)
 			var t := template.terrain_at(c)
-			var col := _terrain_color(t)
-			# 칸마다 아주 옅은 명암 차이로 격자가 읽히게
-			if (x + y) % 2 == 1:
-				col = col.darkened(0.012)
+			var col := _terrain_color(t)   # only shown where the ground mask keeps the flat colour (f ~ # Q d x)
 			var h := -0.12 if t == "~" else 0.0
 			var p0 := Vector3(x * CELL_W, h, y * CELL_D)
 			var p1 := Vector3((x + 1) * CELL_W, h, y * CELL_D)
@@ -325,23 +323,19 @@ func _build_terrain() -> void:
 				st.set_normal(Vector3.UP)
 				st.add_vertex(v)
 	var mi := MeshInstance3D.new()
+	mi.name = "Ground"
 	mi.mesh = st.commit()
-	var m := StandardMaterial3D.new()
-	m.vertex_color_use_as_albedo = true
-	m.roughness = 1.0
-	m.cull_mode = BaseMaterial3D.CULL_BACK   # Godot 앞면은 시계 방향. 윗면이 조명을 받아야 한다.
-	mi.material_override = m
+	# 지면 재질: 월드 XZ 연속 좌표의 잔디·흙 텍스처 + 길 마스크(R) / 고정색 구역(G) / 숲 그늘(B). 논리 칸·길찾기·클릭 판정(Y=0 평면)은 그대로.
+	ground = VillageGround.new()
+	ground.build(template, CELL_W, CELL_D)
+	mi.material_override = ground.material
 	terrain_root.add_child(mi)
-	# 풀 타일: 칸마다 MultiMesh 인스턴스 1개(지역별 묶음). 논리 칸·길찾기·클릭 판정(Y=0 평면)은 그대로.
-	grass = GrassField.new()
-	grass.name = "Grass"
-	terrain_root.add_child(grass)
-	var grass_cells: Array = []
-	for y in VillageTemplate.HEIGHT:
-		for x in VillageTemplate.WIDTH:
-			if GRASS_TERRAIN.has(template.terrain_at(Vector2i(x, y))):
-				grass_cells.append(Vector2i(x, y))
-	grass.build(grass_cells, CELL_W, CELL_D)
+	_build_skirt()
+	# 작은 풀 묶음: 길가·숲 밑·울타리 아래·물가에만 드문드문(고정 seed). 칸 내부는 비워 이동·건설 공간을 남긴다.
+	clumps = GrassClumps.new()
+	clumps.name = "GrassClumps"
+	terrain_root.add_child(clumps)
+	clumps.build(template, CELL_W, CELL_D)
 	# 강 반짝임 줄(정적)
 	for y in VillageTemplate.HEIGHT:
 		for x in VillageTemplate.WIDTH:
@@ -367,6 +361,31 @@ func _build_terrain() -> void:
 				"e":
 					box(terrain_root, Vector3(0.12, 0.9, 0.12), center + Vector3(-0.8, 0.45, 0.3), Color(0.5, 0.36, 0.22))
 					box(terrain_root, Vector3(0.12, 0.9, 0.12), center + Vector3(0.8, 0.45, 0.3), Color(0.5, 0.36, 0.22))
+
+## 남쪽(카메라 쪽) 가장자리의 얕은 흙 단면: 지면(y=0)과 배경판(y=-0.14) 사이 턱을 흙으로 보이게 한다. 논리·판정과 무관.
+func _build_skirt() -> void:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var z := MAP_D_UNITS
+	var p0 := Vector3(0.0, 0.0, z)
+	var p1 := Vector3(MAP_W_UNITS, 0.0, z)
+	var p2 := Vector3(MAP_W_UNITS, -0.26, z)
+	var p3 := Vector3(0.0, -0.26, z)
+	for v in [p0, p2, p1, p0, p3, p2]:
+		st.set_normal(Vector3(0, 0, 1))
+		st.add_vertex(v)
+	var mi := MeshInstance3D.new()
+	mi.name = "GroundSkirt"
+	mi.mesh = st.commit()
+	var m := StandardMaterial3D.new()
+	m.albedo_texture = load(VillageGround.DIR + "ground_dirt.png")
+	m.albedo_color = Color(0.82, 0.78, 0.74)
+	m.uv1_triplanar = true
+	m.uv1_world_triplanar = true
+	m.uv1_scale = Vector3.ONE / 2.0
+	m.roughness = 1.0
+	mi.material_override = m
+	terrain_root.add_child(mi)
 
 # ------------------------------------------------------------------ 장애물
 
@@ -519,14 +538,24 @@ func sync_buildings(vs: VillageState, sim: VillageSim, water: Dictionary) -> voi
 			_remove_dam_wheels(building_nodes[id].node)
 			building_nodes[id].node.queue_free()
 			building_nodes.erase(id)
-	# 설치·공사 중 건물 발밑의 풀 타일은 숨긴다(미리보기는 풀 위에 반투명으로 보인다).
-	if grass != null:
+	# 설치·공사 중 건물 발밑과 문 앞 칸의 풀 묶음은 숨기고(철거하면 같은 자리에 복원), 완공된 길·복구 현장은 지면 마스크에서 흙이 된다.
+	if clumps != null or ground != null:
 		var covered: Array = []
+		var roads: Array = []
 		for id in live.keys():
 			var b: Dictionary = vs.buildings[id]
-			if sim.def_of(b) != null:
-				covered.append_array(sim.cells_of(b))
-		grass.set_hidden_cells(covered)
+			var def := sim.def_of(b)
+			if def == null:
+				continue
+			covered.append_array(sim.cells_of(b))
+			if def.needs_door:
+				covered.append(sim.work_cell(b))
+			if String(b.get("state", "complete")) == "complete" and (def.kind == &"road" or def.kind == &"repair"):
+				roads.append_array(sim.cells_of(b))
+		if clumps != null:
+			clumps.set_hidden_cells(covered)
+		if ground != null:
+			ground.set_road_cells(roads)
 
 func _remove_dam_wheels(n: Node3D) -> void:
 	for i in range(dam_wheels.size() - 1, -1, -1):
@@ -887,7 +916,9 @@ func clear_all() -> void:
 
 func _build_backdrop() -> void:
 	_clear_children(backdrop_root)
-	box(backdrop_root, Vector3(180, 0.2, 150), Vector3(MAP_W_UNITS * 0.5, -0.24, -24), Color("94a576"))
+	var plain := box(backdrop_root, Vector3(180, 0.2, 150), Vector3(MAP_W_UNITS * 0.5, -0.24, -24), Color("94a576"))
+	if ground != null:
+		plain.material_override = ground.material   # R3: the meadow beyond the grid continues the village grass texture
 	var distant := Node3D.new()
 	distant.name = "DistantHills"
 	backdrop_root.add_child(distant)
