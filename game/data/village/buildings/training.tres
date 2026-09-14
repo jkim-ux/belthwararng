@@ -1,0 +1,34 @@
+[gd_resource type="Resource" script_class="BuildingDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/building_def.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = &"training"
+display_name = "훈련장"
+description = "농촌 관리도 60. 완공 시 주인공 공격력 +5% (한 번)."
+kind = &"facility"
+size = Vector2i(3, 2)
+cost_currency = 60
+cost_wood = 12
+cost_stone = 6
+work_required = 30.0
+placement = &"land"
+rotatable = true
+movable = true
+demolishable = false
+walkable = false
+needs_door = true
+max_per_village = 1
+requires_management = 60
+site_id = &"ch1_farm"
+water_capacity = 0
+produce_kind = &""
+produce_amount = 0
+produce_amount_unfed = 0
+cycle_seconds = 0.0
+eats_food = false
+needs_water = false
+villagers_on_complete = 0
+facility_id = &"training_ground"
+management_on_complete = 0

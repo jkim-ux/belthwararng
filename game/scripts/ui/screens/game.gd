@@ -1,12 +1,13 @@
 class_name Game
 extends Control
-## 게임 루트: 시작 화면 → 지도 → 관리 / 거점 전투 → 결과 → 합류 → 동료 선택. 수련장은 캠페인 저장과 분리된다.
+## 게임 루트: 시작 화면 → 지도 → 마을(직접 걷고 건설) / 거점 전투 → 결과 → 합류 → 동료 선택. 수련장은 캠페인 저장과 분리된다.
 ## 화면은 코드로 만든 Control 이며 마우스와 키보드(방향키·Enter)로 조작한다.
-## 사용자 인자: --training / --demo (수련장 바로 시작), --save=경로 (다른 저장 파일 사용, 테스트용)
+## 사용자 인자: --training / --demo (수련장), --village-test (마을 테스트), --save=경로
 
 const BATTLE_SCENE := "res://scenes/battle.tscn"
 const BASE_ATTACK := 20.0
 const BASE_MAX_HP := 100
+const VILLAGE_TEST_SUFFIX := ".village_test"
 
 var campaign: CampaignController
 var ui_theme: Theme
@@ -18,9 +19,14 @@ var current_screen: String = ""
 var pending_join_companion: String = ""
 var last_result: Dictionary = {}
 var _pause_overlay: Control
+var village_view: VillageView = null
+var _campaign_before_village_test: CampaignController = null
 
 func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
+	# HWR-005 R1: 루트 Control 의 기본 mouse_filter(STOP)가 빈 마을 영역의 마우스 이동·클릭을 소비해 VillageView._unhandled_input 에
+	# 닿지 않았다. 루트는 입력을 가로채지 않는 컨테이너로 두고, 실제 버튼·패널·모달(자식 Control)만 입력을 소비한다.
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ui_theme = Theme.new()
 	ui_theme.default_font = UiFont.FONT
 	ui_theme.default_font_size = 16
@@ -31,6 +37,7 @@ func _ready() -> void:
 	screen_root = Control.new()
 	screen_root.name = "Screens"
 	screen_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	screen_root.mouse_filter = Control.MOUSE_FILTER_IGNORE   # 마을 장면의 월드 클릭이 _unhandled_input 으로 가도록(버튼은 자식이 먼저 받음)
 	add_child(screen_root)
 	overlay_root = Control.new()
 	overlay_root.name = "Overlays"
@@ -39,13 +46,18 @@ func _ready() -> void:
 	add_child(overlay_root)
 	var save_path := CampaignController.DEFAULT_SAVE_PATH
 	var go_training := false
+	var go_village_test := false
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--save="):
 			save_path = a.trim_prefix("--save=")
 		elif a == "--training" or a == "--demo":
 			go_training = true
+		elif a == "--village-test":
+			go_village_test = true
 	campaign = CampaignController.new(save_path)
-	if go_training:
+	if go_village_test:
+		start_village_test()
+	elif go_training:
 		start_training()
 	else:
 		show_title()
@@ -53,6 +65,9 @@ func _ready() -> void:
 # ------------------------------------------------------------------ 공통 위젯
 
 func _clear_screen() -> void:
+	if village_view != null and is_instance_valid(village_view):
+		village_view.queue_free()
+	village_view = null
 	for c in screen_root.get_children():
 		c.queue_free()
 	for c in overlay_root.get_children():
@@ -124,22 +139,60 @@ func _background(title: String) -> VBoxContainer:
 # ------------------------------------------------------------------ 시작 화면
 
 func show_title() -> void:
+	if _campaign_before_village_test != null:
+		var leave := campaign.leave_village()
+		if not leave.ok:
+			if village_view != null:
+				village_view._say("테스트 마을 저장 실패: %s" % leave.reason)
+			return
+		campaign = _campaign_before_village_test
+		_campaign_before_village_test = null
 	_close_battle()
 	_clear_screen()
 	current_screen = "title"
 	var v := _background("사무라이 점령전")
-	v.add_child(_label("첫 마을에서 시작하는 반격. 챕터 1 '꺼진 봉화' — 농촌 → 창고 마을 → 고개 초소. 거점마다 방 던전(입구 → 전투 3 → 보스, 선택 보물방). 적 피해 2배·강인병·액티브 8개.", 16))
-	v.add_child(_label("HWR-004 R1 · 전투 기획 v0.5", 13, Color(0.7, 0.7, 0.7)))
+	v.add_child(_label("첫 마을에서 시작하는 반격. 챕터 1 '꺼진 봉화' — 농촌 → 창고 마을 → 고개 초소. 거점마다 방 던전(입구 → 전투 3 → 보스, 선택 보물방). 적 피해 2배·강인병·액티브 8개. 해방한 마을은 직접 걸어 다니며 개간·건설·관개·주민 배정으로 가꾼다.", 16))
+	v.add_child(_label("HWR-005 · 기획 v0.6 (전투 HWR-004 R1)", 13, Color(0.7, 0.7, 0.7)))
 	v.add_child(HSeparator.new())
 	var has_save := campaign.has_save()
 	v.add_child(_button("새 게임", _on_new_game))
 	v.add_child(_button("이어하기" + ("" if has_save else " (저장 없음)"), _on_continue, has_save))
+	v.add_child(_button("마을 바로 테스트 (전투 없이 · 별도 저장)", start_village_test))
 	v.add_child(_button("수련장 (프로필 비교 · 허수아비/근접병/강인병 표적 · 8스킬 · 저장 없음)", start_training))
 	v.add_child(HSeparator.new())
-	v.add_child(_label("조작: 방향키 이동, X 평타, C 점프, Space 회피, A 돌진베기, S 올려베기, D 내려베기, F 회전베기, Q 방어깨기, W 검기, E 흘려받기, R 일섬연무, Enter 문 이동/상자, Esc 일시정지.", 13, Color(0.75, 0.75, 0.75)))
+	v.add_child(_label("전투: 방향키 이동, X 평타, C 점프, Space 회피, A 돌진베기, S 올려베기, D 내려베기, F 회전베기, Q 방어깨기, W 검기, E 흘려받기, R 일섬연무, Enter 문 이동/상자, Esc 일시정지.", 13, Color(0.75, 0.75, 0.75)))
+	v.add_child(_label("마을: 방향키/WASD 이동, E 작업, B 건설, 마우스 배치, R 회전, 우클릭/Esc 취소.", 13, Color(0.75, 0.75, 0.75)))
 	v.add_child(_label("저장 파일: %s" % campaign.store.path, 12, Color(0.55, 0.55, 0.55)))
 	if campaign.last_load_message != "":
 		v.add_child(_label(campaign.last_load_message, 13, Color(1.0, 0.7, 0.6)))
+
+## 첫 농촌을 바로 열되 실제 캠페인 컨트롤러와 저장 파일은 보존한다.
+## 테스트 배치도 다음 실행에 이어서 확인할 수 있도록 별도 슬롯에 저장한다.
+func start_village_test() -> void:
+	if _campaign_before_village_test != null:
+		return
+	var test_campaign := CampaignController.new(campaign.store.path + VILLAGE_TEST_SUFFIX, campaign.data)
+	if test_campaign.has_save():
+		var loaded := test_campaign.continue_game()
+		if not loaded.ok:
+			campaign.last_load_message = "테스트 마을을 읽을 수 없음: %s" % loaded.error
+			show_title()
+			return
+	else:
+		# 첫 진입의 enter_village가 이 상태와 템플릿·정령·물자를 함께 원자 저장한다.
+		test_campaign.state = CampaignState.new_game(test_campaign.data)
+		var site := test_campaign.data.site(&"ch1_farm")
+		test_campaign.state.sites[String(site.id)]["liberated"] = true
+		test_campaign.state.sites[String(site.id)]["management"] = site.management_on_liberate
+		test_campaign.state.currency = 1000
+		test_campaign.state.wood = 300
+		test_campaign.state.stone = 300
+		test_campaign.state.food = 100
+	_campaign_before_village_test = campaign
+	campaign = test_campaign
+	if not show_village(&"ch1_farm", "테스트 마을 · 건설용 물자 제공 · 배치는 별도로 저장됩니다."):
+		_campaign_before_village_test.last_load_message = "테스트 마을 진입 실패: " + campaign.store.last_error
+		show_title()
 
 func _on_new_game() -> void:
 	if campaign.has_save():
@@ -192,7 +245,7 @@ func show_map(message: String = "") -> void:
 	var data := campaign.data
 	var v := _background("섬의 지도 — 전선")
 	var head := _hbox()
-	head.add_child(_hlabel("군자금 %d" % st.currency, 18, Color(1.0, 0.9, 0.5)))
+	head.add_child(_hlabel("군자금 %d · 목재 %d · 석재 %d · 식량 %d" % [st.currency, st.wood, st.stone, st.food], 18, Color(1.0, 0.9, 0.5)))
 	var comp := campaign.selected_companion()
 	head.add_child(_hlabel("동행: %s" % (comp.display_name if comp else "없음 (혼자 출정)"), 16))
 	head.add_child(_hlabel("공격력 %.0f · 최대 체력 %d" % [campaign.player_attack_power(BASE_ATTACK), campaign.player_max_hp(BASE_MAX_HP)], 14, Color(0.8, 0.9, 0.8)))
@@ -257,121 +310,58 @@ func _site_row(site: SiteDef) -> Control:
 	else:
 		row.add_child(_hlabel("진입 조건: %s" % chk.reason, 13, Color(0.9, 0.75, 0.6)))
 	if site.is_village() and st.is_liberated(site.id):
-		row.add_child(_button("관리", func(): show_manage(site.id)))
+		row.add_child(_button("마을 들어가기", func(): show_village(site.id), not campaign.has_pending()))
 	return row
 
 func _retry_pending_from_map() -> void:
 	var r := campaign.retry_pending()
 	show_map("저장 성공. 결과가 반영되었다." if r.saved else "저장 재시도 실패: %s" % r.reason)
 
-# ------------------------------------------------------------------ 마을 관리
+# ------------------------------------------------------------------ 마을 (HWR-005)
 
-class VillageScene extends Control:
-	var site: SiteDef
-	var liberated := false
-	var repaired := false
-	var facility_bought := false
-	func _draw() -> void:
-		var w := size.x
-		var h := size.y
-		draw_rect(Rect2(0, 0, w, h), Color(0.55, 0.62, 0.75) if liberated else Color(0.35, 0.3, 0.32))
-		draw_rect(Rect2(0, h * 0.55, w, h * 0.45), Color(0.45, 0.6, 0.3) if repaired else (Color(0.55, 0.5, 0.35) if liberated else Color(0.4, 0.35, 0.3)))
-		var is_farm := site != null and site.id == &"ch1_farm"
-		# 논밭/수로 또는 창고 지붕/짐수레
-		if is_farm:
-			for i in 6:
-				var y := h * 0.6 + i * 14.0
-				draw_line(Vector2(20, y), Vector2(w * 0.55, y), Color(0.3, 0.5, 0.2) if repaired else Color(0.5, 0.42, 0.3), 3.0)
-			if repaired:
-				draw_line(Vector2(w * 0.58, h * 0.55), Vector2(w * 0.58, h), Color(0.4, 0.6, 0.9), 6.0)
-		else:
-			var roof_col := Color(0.5, 0.3, 0.2) if repaired else Color(0.35, 0.3, 0.28)
-			draw_rect(Rect2(w * 0.1, h * 0.35, w * 0.35, h * 0.3), Color(0.6, 0.55, 0.45))
-			if repaired:
-				draw_colored_polygon(PackedVector2Array([Vector2(w * 0.08, h * 0.36), Vector2(w * 0.275, h * 0.2), Vector2(w * 0.47, h * 0.36)]), roof_col)
-			else:
-				draw_line(Vector2(w * 0.08, h * 0.36), Vector2(w * 0.2, h * 0.24), roof_col, 5.0)
-				draw_line(Vector2(w * 0.34, h * 0.28), Vector2(w * 0.47, h * 0.36), roof_col, 5.0)
-			if repaired:
-				draw_rect(Rect2(w * 0.6, h * 0.72, 60, 24), Color(0.55, 0.4, 0.25))
-				draw_circle(Vector2(w * 0.6 + 12, h * 0.72 + 28), 8, Color(0.2, 0.2, 0.2))
-				draw_circle(Vector2(w * 0.6 + 48, h * 0.72 + 28), 8, Color(0.2, 0.2, 0.2))
-		# 깃발: 점령 중 적 깃발(검붉은) / 해방 후 새 깃발(흰·남색)
-		var fx := w * 0.85
-		draw_line(Vector2(fx, h * 0.25), Vector2(fx, h * 0.8), Color(0.3, 0.25, 0.2), 3.0)
-		draw_rect(Rect2(fx, h * 0.25, 40, 26), Color(0.25, 0.75, 0.9) if liberated else Color(0.6, 0.1, 0.1))
-		# 주민(작은 도형): 점령 중에는 없음, 해방 후 2명, 정비 후 4명 + 시설 시 표시
-		var n := 0 if not liberated else (4 if repaired else 2)
-		for i in n:
-			var px := w * 0.62 + i * 26.0
-			var py := h * 0.9
-			draw_rect(Rect2(px - 6, py - 22, 12, 22), Color(0.9, 0.85, 0.7))
-			draw_circle(Vector2(px, py - 28), 6, Color(0.95, 0.85, 0.7))
-		if facility_bought:
-			draw_rect(Rect2(w * 0.05, h * 0.05, 120, 22), Color(0, 0, 0, 0.4))
-			draw_string(UiFont.FONT, Vector2(w * 0.05 + 6, h * 0.05 + 16), "시설 가동 중", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(1, 1, 0.8))
-
-func show_manage(site_id: StringName, message: String = "") -> void:
+## 해방된 마을에 들어간다. 첫 진입이면 초기화(템플릿·주민·일회성 물자)를 저장한다. 마을 장면은 VillageView 가 그린다.
+func show_village(site_id: StringName, message: String = "") -> bool:
 	_close_battle()
 	_clear_screen()
-	current_screen = "manage"
-	var st := campaign.state
-	var data := campaign.data
-	var site := data.site(site_id)
-	if site == null or not site.is_village() or not st.is_liberated(site.id):
-		show_map("관리할 수 없는 거점")
+	var site := campaign.data.site(site_id)
+	if site == null or not site.is_village() or not campaign.state.is_liberated(site.id):
+		show_map("들어갈 수 없는 거점")
+		return false
+	var r := campaign.enter_village(site_id)
+	if not r.ok:
+		show_map("마을 진입 거부: %s" % r.reason)
+		return false
+	current_screen = "village"
+	var view := VillageView.new()
+	view.name = "Village"
+	view.test_mode = _campaign_before_village_test != null
+	view.setup(campaign, site_id)
+	view.leave_requested.connect(_leave_village)
+	screen_root.add_child(view)
+	village_view = view
+	var sup: Dictionary = r.get("supplies", {})
+	if view.test_mode and message != "":
+		view._say(message)
+	elif not sup.is_empty():
+		view._say("복구 물자 지급: 목재 %d · 석재 %d · 식량 %d (1회)" % [int(sup.wood), int(sup.stone), int(sup.food)])
+	elif message != "":
+		view._say(message)
+	return true
+
+## 이전 '관리' 진입점. 마을 장면으로 연결한다(초소 등 마을이 아니면 지도).
+func show_manage(site_id: StringName, message: String = "") -> void:
+	show_village(site_id, message)
+
+func _leave_village() -> void:
+	var r := campaign.leave_village()
+	if not r.ok:
+		if village_view != null:
+			village_view._say("마을 저장 실패: %s" % r.reason)
 		return
-	var v := _background("%s — 마을 관리" % site.display_name)
-	var scene := VillageScene.new()
-	scene.site = site
-	scene.liberated = true
-	scene.repaired = st.is_repaired(site.id)
-	scene.facility_bought = site.facility != null and st.has_facility(site.facility.id)
-	scene.custom_minimum_size = Vector2(1120, 130)
-	v.add_child(scene)
-	var scene_text := site.scene_repaired if scene.repaired else site.scene_liberated
-	v.add_child(_label(scene_text, 14, Color(0.85, 0.9, 0.85)))
-	var head := _hbox()
-	head.add_child(_hlabel("관리도 %d / 60" % st.management(site.id), 18, Color(0.8, 1.0, 0.8)))
-	head.add_child(_hlabel("군자금 %d" % st.currency, 18, Color(1.0, 0.9, 0.5)))
-	v.add_child(head)
-	if message != "":
-		v.add_child(_label(message, 14, Color(1.0, 0.85, 0.6)))
-	# 정비
-	var rep := st.can_repair(site)
-	var rep_row := _hbox()
-	rep_row.add_child(_button("정비 (-%d)  관리도 40 → 60" % site.repair_cost, func(): _do_repair(site.id), rep.ok))
-	rep_row.add_child(_hlabel("완료" if st.is_repaired(site.id) else rep.reason, 13, Color(0.7, 0.9, 0.7) if st.is_repaired(site.id) else Color(0.85, 0.75, 0.6)))
-	v.add_child(rep_row)
-	# 시설
-	if site.facility != null:
-		var f := site.facility
-		var fchk := st.can_buy_facility(site)
-		var frow := _hbox()
-		frow.add_child(_button("%s (-%d)  %s" % [f.display_name, f.cost, f.description], func(): _do_buy(site.id), fchk.ok))
-		frow.add_child(_hlabel("구매 완료" if st.has_facility(f.id) else fchk.reason, 13, Color(0.7, 0.9, 0.7) if st.has_facility(f.id) else Color(0.85, 0.75, 0.6)))
-		v.add_child(frow)
-		v.add_child(_label("주민: " + f.villagers_text, 13, Color(0.75, 0.75, 0.75)))
-	# 다음 거점 조건
-	for other in data.sites:
-		if other.prerequisite_site_id == site.id:
-			var chk := st.can_enter_site(other, data)
-			v.add_child(_label("다음 거점 %s: %s" % [other.display_name, "진입 가능" if chk.ok else chk.reason], 14, Color(0.8, 0.9, 1.0)))
-	v.add_child(_label("출정 시 효과: 공격력 %.0f, 최대 체력 %d (저장된 구매 플래그에서 계산)" % [campaign.player_attack_power(BASE_ATTACK), campaign.player_max_hp(BASE_MAX_HP)], 13, Color(0.7, 0.8, 0.7)))
-	var foot := _hbox()
-	foot.add_child(_button("출정 (재도전 +%d)" % site.repeat_reward, func(): start_battle(site.id), not campaign.has_pending()))
-	foot.add_child(_button("지도로", func(): show_map()))
-	v.add_child(foot)
-
-func _do_repair(site_id: StringName) -> void:
-	var r := campaign.repair(site_id)
-	var msg := "정비 완료. 관리도 60." if r.ok and r.saved else ("정비 거부: %s" % r.reason if not r.ok else "정비 저장 실패: %s" % r.reason)
-	show_manage(site_id, msg)
-
-func _do_buy(site_id: StringName) -> void:
-	var r := campaign.buy_facility(site_id)
-	var msg := "시설 구매 완료. 효과는 다음 출정부터 적용." if r.ok and r.saved else ("구매 거부: %s" % r.reason if not r.ok else "구매 저장 실패: %s" % r.reason)
-	show_manage(site_id, msg)
+	if _campaign_before_village_test != null:
+		show_title()
+		return
+	show_map("마을에서 나왔다. 마을 시간은 다시 들어갈 때까지 멈춘다.")
 
 # ------------------------------------------------------------------ 전투
 
@@ -452,7 +442,7 @@ func _show_result(result: Dictionary) -> void:
 			if result.get("liberated_now", false):
 				v.add_child(_label("보스 격파 — %s 해방! 최초 보상 군자금 +%d%s" % [site_name, result.reward, bonus_text], 16, Color(0.8, 1.0, 0.8)))
 				if site and site.is_village():
-					v.add_child(_label("관리도 40. 마을 관리에서 정비(40)하면 60이 되어 다음 거점이 열린다.", 14))
+					v.add_child(_label("관리도 40. 지도에서 '마을 들어가기'로 직접 개간·건설하고, 경로 복구 현장(군자금 40)을 완공하면 60이 되어 다음 거점이 열린다.", 14))
 			else:
 				v.add_child(_label("보스 격파 — 재도전 승리. 군자금 +%d%s (점령·관리·해금은 그대로)" % [result.reward, bonus_text], 16, Color(0.8, 1.0, 0.8)))
 			if String(result.get("chapter_cleared", "")) != "":

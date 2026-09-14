@@ -27,6 +27,10 @@ extends Resource
 @export var management_on_repair: int = 60
 @export var repair_cost: int = 40
 @export var facility: FacilityDef
+## 마을 첫 초기화 때 한 번 지급하는 복구 물자(HWR-005). 재입장/로드/재승리로 다시 주지 않는다.
+@export var initial_wood: int = 0
+@export var initial_stone: int = 0
+@export var initial_food: int = 0
 ## 전경 문구: 점령 중 / 해방 후 / 정비 후
 @export var scene_occupied: String = ""
 @export var scene_liberated: String = ""

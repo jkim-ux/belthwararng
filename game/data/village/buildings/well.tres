@@ -1,0 +1,34 @@
+[gd_resource type="Resource" script_class="BuildingDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/building_def.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = &"well"
+display_name = "우물"
+description = "일반 지면 2×2. 연결된 농장 2개에 물을 공급한다."
+kind = &"well"
+size = Vector2i(2, 2)
+cost_currency = 0
+cost_wood = 8
+cost_stone = 6
+work_required = 30.0
+placement = &"land"
+rotatable = true
+movable = true
+demolishable = true
+walkable = false
+needs_door = true
+max_per_village = 0
+requires_management = 0
+site_id = &""
+water_capacity = 2
+produce_kind = &""
+produce_amount = 0
+produce_amount_unfed = 0
+cycle_seconds = 0.0
+eats_food = false
+needs_water = false
+villagers_on_complete = 0
+facility_id = &""
+management_on_complete = 0

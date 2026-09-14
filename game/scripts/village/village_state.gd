@@ -1,0 +1,347 @@
+class_name VillageState
+extends RefCounted
+## 마을 1곳의 영구 상태(저장 대상). 템플릿·건물 정의(공유 데이터)와 분리된다.
+## 건물 인스턴스와 주민은 Dictionary 로 두며 고유 ID(next_id)는 이동/철거로 재발급하지 않는다.
+## 파생값(물 연결·통행 격자·경로)은 저장하지 않고 VillageSim 이 다시 계산한다.
+##
+## 건물 인스턴스: {id:int, def_id:String, x:int, y:int, rot:int, state:"construction"|"complete",
+##   work_done:float, progress:float(농사/생산 유효 작업초), fed:int(-1 주기 미시작, 0 식량 없이 시작, 1 식량 소비),
+##   house_returned:bool(주택 귀환 1회 기록)}
+## 주민: {id:int, name:String, job_kind:""|"build"|"farm"|"lumber"|"quarry"|"clear", job_building:int(0 = 없음),
+##   job_obstacle:String("" = 없음. HWR-006 밭 정돈 부탁 대상 장애물 ID, job_kind "clear" 일 때만)}
+## job_kind 가 "" 이면 빈손(유휴)이다. 기존 저장(HWR-005)에는 job_obstacle 이 없으므로 "" 로 채운다.
+
+const INITIAL_VILLAGERS := 3
+const MAX_VILLAGERS := 7
+const NAMES := ["하루", "미나", "고로", "사요", "타로", "유키", "겐타", "아키", "리쿠", "하나"]
+
+var site_id: String = ""
+var initialized: bool = false
+var layout_version: int = VillageTemplate.LAYOUT_VERSION
+var stored_buildings: Dictionary = {}  ## 작은 마을에 못 옮긴 건물. 같은 건설 버튼으로 무료 재배치.
+var previous_layout: Dictionary = {}   ## 이전 전 배치 원본(1회 보존).
+var next_id: int = 1
+var cleared: Array = []            ## 제거한 장애물 ID(String)
+var clearing: Dictionary = {}      ## 장애물 ID -> 진행 작업량(float)
+var buildings: Dictionary = {}     ## int id -> Dictionary
+var villagers: Dictionary = {}     ## int id -> Dictionary
+
+static func create(p_site_id: String) -> VillageState:
+	var v := VillageState.new()
+	v.site_id = p_site_id
+	v.initialized = true
+	for i in INITIAL_VILLAGERS:
+		v.add_villager()
+	return v
+
+func duplicate_state() -> VillageState:
+	var v := VillageState.new()
+	v.site_id = site_id
+	v.initialized = initialized
+	v.layout_version = layout_version
+	v.stored_buildings = stored_buildings.duplicate(true)
+	v.previous_layout = previous_layout.duplicate(true)
+	v.next_id = next_id
+	v.cleared = cleared.duplicate()
+	v.clearing = clearing.duplicate()
+	v.buildings = buildings.duplicate(true)
+	v.villagers = villagers.duplicate(true)
+	return v
+
+func to_dict() -> Dictionary:
+	var b := {}
+	for id in buildings.keys():
+		b[str(id)] = buildings[id].duplicate()
+	var vs := {}
+	for id in villagers.keys():
+		vs[str(id)] = villagers[id].duplicate()
+	return {
+		"site_id": site_id,
+		"initialized": initialized,
+		"layout_version": layout_version,
+		"stored_buildings": stored_buildings.duplicate(true),
+		"previous_layout": previous_layout.duplicate(true),
+		"next_id": next_id,
+		"cleared": cleared.duplicate(),
+		"clearing": clearing.duplicate(),
+		"buildings": b,
+		"villagers": vs,
+	}
+
+## 검증하며 읽는다. 알 수 없는 건물 정의·범위 밖 좌표는 버리고 error 에 남긴다.
+static func from_dict(d: Variant, p_site_id: String, data: CampaignData, error: Array) -> VillageState:
+	var v := VillageState.new()
+	v.site_id = p_site_id
+	if typeof(d) != TYPE_DICTIONARY:
+		v.initialized = false
+		return v
+	v.initialized = bool(d.get("initialized", false))
+	v.layout_version = int(d.get("layout_version", 0))
+	if d.get("previous_layout", {}) is Dictionary:
+		v.previous_layout = d.get("previous_layout", {}).duplicate(true)
+	v.next_id = maxi(1, int(d.get("next_id", 1)))
+	var raw_cleared: Variant = d.get("cleared", [])
+	if typeof(raw_cleared) == TYPE_ARRAY:
+		for c in raw_cleared:
+			if not v.cleared.has(String(c)):
+				v.cleared.append(String(c))
+	var raw_clearing: Variant = d.get("clearing", {})
+	if typeof(raw_clearing) == TYPE_DICTIONARY:
+		for k in raw_clearing.keys():
+			var w := float(raw_clearing[k])
+			if w > 0.0 and not v.cleared.has(String(k)):
+				v.clearing[String(k)] = w
+	var raw_b: Variant = d.get("buildings", {})
+	var raw_stored: Variant = d.get("stored_buildings", {})
+	var stored_ids := {}
+	if raw_b is Dictionary:
+		raw_b = raw_b.duplicate(true)
+		if raw_stored is Dictionary:
+			for k in raw_stored:
+				var key := str(k)
+				if not raw_b.has(key):
+					raw_b[key] = raw_stored[k]
+					stored_ids[int(key)] = true
+	var max_id := 0
+	if typeof(raw_b) == TYPE_DICTIONARY:
+		for k in raw_b.keys():
+			var e: Variant = raw_b[k]
+			if typeof(e) != TYPE_DICTIONARY:
+				continue
+			var id := int(e.get("id", int(String(k)) if String(k).is_valid_int() else 0))
+			var def := data.building(StringName(String(e.get("def_id", ""))))
+			if id <= 0 or def == null:
+				error.append("%s: 건물 %s 정의 없음 → 제외" % [p_site_id, str(k)])
+				continue
+			var x := int(e.get("x", -1))
+			var y := int(e.get("y", -1))
+			var rot := posmod(int(e.get("rot", 0)), 4)
+			var fp := def.footprint(rot)
+			var legacy := v.layout_version == 0 or stored_ids.has(id)
+			var width := VillageTemplate.LEGACY_WIDTH if legacy else VillageTemplate.WIDTH
+			var height := VillageTemplate.LEGACY_HEIGHT if legacy else VillageTemplate.HEIGHT
+			if x < 0 or y < 0 or x + fp.x > width or y + fp.y > height:
+				error.append("%s: 건물 %d 좌표 범위 밖 → 제외" % [p_site_id, id])
+				continue
+			var st := String(e.get("state", "construction"))
+			if st != "complete":
+				st = "construction"
+			v.buildings[id] = {
+				"id": id, "def_id": String(def.id), "x": x, "y": y, "rot": rot, "state": st,
+				"work_done": maxf(0.0, float(e.get("work_done", 0.0))),
+				"progress": maxf(0.0, float(e.get("progress", 0.0))),
+				"fed": clampi(int(e.get("fed", -1)), -1, 1),
+				"house_returned": bool(e.get("house_returned", false)),
+			}
+			if stored_ids.has(id):
+				v.stored_buildings[id] = v.buildings[id]
+				v.buildings.erase(id)
+			max_id = maxi(max_id, id)
+	var raw_v: Variant = d.get("villagers", {})
+	if typeof(raw_v) == TYPE_DICTIONARY:
+		for k in raw_v.keys():
+			var e: Variant = raw_v[k]
+			if typeof(e) != TYPE_DICTIONARY:
+				continue
+			var id := int(e.get("id", int(String(k)) if String(k).is_valid_int() else 0))
+			if id <= 0 or v.villagers.size() >= MAX_VILLAGERS:
+				continue
+			var jb := int(e.get("job_building", 0))
+			var jk := String(e.get("job_kind", ""))
+			var jo := String(e.get("job_obstacle", ""))
+			if jk == "clear":
+				jb = 0
+				# 정돈 대상은 템플릿에 있는 장애물이고 아직 제거되지 않아야 한다
+				var tpl := data.village_template(StringName(p_site_id))
+				var oc := VillageSim.obstacle_cell_of(jo)
+				if tpl == null or oc.x < 0 or tpl.obstacle_at(oc) == "." or v.cleared.has(jo):
+					if v.layout_version != 0:
+						error.append("%s: 주민 %d 정돈 대상 %s 없음 → 해제" % [p_site_id, id, jo])
+					jk = ""
+					jo = ""
+			else:
+				jo = ""
+				if jb != 0 and not v.buildings.has(jb):
+					jb = 0
+					jk = ""
+				if jb == 0:
+					jk = ""
+			v.villagers[id] = {"id": id, "name": String(e.get("name", "주민")), "job_kind": jk, "job_building": jb, "job_obstacle": jo}
+			max_id = maxi(max_id, id)
+	if v.next_id <= max_id:
+		v.next_id = max_id + 1
+	# 한 건물/장애물에 주민 1명: 중복 배정은 뒤의 주민을 해제한다.
+	var taken := {}
+	for id in v.sorted_villager_ids():
+		var vl: Dictionary = v.villagers[id]
+		var key: Variant = null
+		if vl.job_building != 0:
+			key = vl.job_building
+		elif vl.job_obstacle != "":
+			key = vl.job_obstacle
+		if key != null:
+			if taken.has(key):
+				vl.job_building = 0
+				vl.job_kind = ""
+				vl.job_obstacle = ""
+				error.append("%s: 주민 %d 중복 배정 해제" % [p_site_id, id])
+			else:
+				taken[key] = true
+	return v
+
+# ------------------------------------------------------------------ 조회
+
+func building(id: int) -> Dictionary:
+	return buildings.get(id, {})
+
+func has_building(id: int) -> bool:
+	return buildings.has(id)
+
+func count_of_def(def_id: StringName) -> int:
+	var n := 0
+	for b in buildings.values() + stored_buildings.values():
+		if b.def_id == String(def_id):
+			n += 1
+	return n
+
+func has_complete_of_def(def_id: StringName) -> bool:
+	for b in buildings.values():
+		if b.def_id == String(def_id) and b.state == "complete":
+			return true
+	return false
+
+func sorted_building_ids() -> Array:
+	var ids := buildings.keys()
+	ids.sort()
+	return ids
+
+func villager(id: int) -> Dictionary:
+	return villagers.get(id, {})
+
+func sorted_villager_ids() -> Array:
+	var ids := villagers.keys()
+	ids.sort()
+	return ids
+
+## 빈손(유휴) 주민: 건물 배정도 정돈 부탁도 없는 주민
+static func is_idle(vl: Dictionary) -> bool:
+	return String(vl.job_kind) == ""
+
+func free_villager_count() -> int:
+	var n := 0
+	for v in villagers.values():
+		if is_idle(v):
+			n += 1
+	return n
+
+## 가장 낮은 ID 의 빈손 주민(없으면 0)
+func first_idle_villager() -> int:
+	for id in sorted_villager_ids():
+		if is_idle(villagers[id]):
+			return id
+	return 0
+
+## 건물에 배정된 주민 ID(없으면 0)
+func worker_of(building_id: int) -> int:
+	if building_id == 0:
+		return 0
+	for id in sorted_villager_ids():
+		if villagers[id].job_building == building_id:
+			return id
+	return 0
+
+## 장애물 정돈을 맡은 주민 ID(없으면 0)
+func worker_of_obstacle(obstacle_id: String) -> int:
+	if obstacle_id == "":
+		return 0
+	for id in sorted_villager_ids():
+		if String(villagers[id].job_obstacle) == obstacle_id:
+			return id
+	return 0
+
+func is_cleared(obstacle_id: String) -> bool:
+	return cleared.has(obstacle_id)
+
+# ------------------------------------------------------------------ 변경 (후보 상태에서 호출)
+
+func add_villager() -> int:
+	if villagers.size() >= MAX_VILLAGERS:
+		return 0
+	var id := next_id
+	next_id += 1
+	var name: String = NAMES[(villagers.size() + (hash(site_id) % 3)) % NAMES.size()]
+	villagers[id] = {"id": id, "name": name, "job_kind": "", "job_building": 0, "job_obstacle": ""}
+	return id
+
+func add_building(def: BuildingDef, x: int, y: int, rot: int, complete: bool = false) -> int:
+	var id := next_id
+	next_id += 1
+	buildings[id] = {
+		"id": id, "def_id": String(def.id), "x": x, "y": y, "rot": posmod(rot, 4),
+		"state": "complete" if complete else "construction",
+		"work_done": def.work_required if complete else 0.0,
+		"progress": 0.0, "fed": -1, "house_returned": false,
+	}
+	return id
+
+func remove_building(id: int) -> void:
+	buildings.erase(id)
+	for v in villagers.values():
+		if v.job_building == id:
+			v.job_building = 0
+			v.job_kind = ""
+			v.job_obstacle = ""
+
+func assign(villager_id: int, building_id: int, job_kind: String) -> void:
+	# 같은 건물의 기존 주민은 해제(한 현장 주민 최대 1명)
+	for v in villagers.values():
+		if v.job_building == building_id and v.id != villager_id:
+			v.job_building = 0
+			v.job_kind = ""
+			v.job_obstacle = ""
+	var vl: Dictionary = villagers[villager_id]
+	vl.job_building = building_id
+	vl.job_kind = job_kind
+	vl.job_obstacle = ""
+
+## 밭 정돈 부탁: 주민 1명이 장애물 1개를 맡는다(같은 대상의 기존 주민은 해제).
+func assign_clear(villager_id: int, obstacle_id: String) -> void:
+	for v in villagers.values():
+		if String(v.job_obstacle) == obstacle_id and v.id != villager_id:
+			v.job_building = 0
+			v.job_kind = ""
+			v.job_obstacle = ""
+	var vl: Dictionary = villagers[villager_id]
+	vl.job_building = 0
+	vl.job_kind = "clear"
+	vl.job_obstacle = obstacle_id
+
+func unassign(villager_id: int) -> void:
+	if villagers.has(villager_id):
+		villagers[villager_id].job_building = 0
+		villagers[villager_id].job_kind = ""
+		villagers[villager_id].job_obstacle = ""
+
+## 가장 먼저 보관된 같은 종류부터 복원한다(추가 자원·완공 보상 없음).
+func stored_id_for(def_id: StringName) -> int:
+	var ids := stored_buildings.keys()
+	ids.sort()
+	for id in ids:
+		if String(stored_buildings[id].def_id) == String(def_id):
+			return int(id)
+	return 0
+
+func stored_count(def_id: StringName) -> int:
+	var n := 0
+	for b in stored_buildings.values():
+		if String(b.def_id) == String(def_id):
+			n += 1
+	return n
+
+func restore_building(id: int, x: int, y: int, rot: int) -> void:
+	var b: Dictionary = stored_buildings[id]
+	b.x = x
+	b.y = y
+	b.rot = posmod(rot, 4)
+	buildings[id] = b
+	stored_buildings.erase(id)

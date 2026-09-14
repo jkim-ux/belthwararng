@@ -1,0 +1,40 @@
+[gd_resource type="Resource" script_class="VillageTemplate" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/village_template.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+site_id = &"ch1_farm"
+display_name = "작은 강가 정원"
+description = "16×12칸의 작은 정령 마을. 빈 땅에 바로 농장을 놓고 물길을 연결한다."
+terrain_rows = PackedStringArray(
+"W.........QQQQ.~",
+"W......xx......~",
+"W......xx...ddd~",
+"W...........ddd~",
+"W..............~",
+"W..............~",
+"W..............~",
+"W..............~",
+"Wpppppppppppppp~",
+".......p.......~",
+".......p.......~",
+".......ee......~"
+)
+obstacle_rows = PackedStringArray(
+"................",
+"................",
+"................",
+"................",
+"................",
+"................",
+"................",
+"................",
+"................",
+"................",
+"................",
+"................"
+)
+spawn = Vector2i(7, 10)
+dam_outlet = Vector2i(11, 3)
+facility_spot = Rect2i(7, 5, 3, 2)

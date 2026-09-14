@@ -1,5 +1,5 @@
 extends SceneTree
-## HWR-002 R1 + HWR-003 캠페인 자동 검증. 실행: godot --headless --path game -s tests/run_campaign_tests.gd
+## HWR-002 R1 + HWR-003 캠페인 자동 검증 (HWR-005: 정비/시설 즉시 구매는 마을 건설 완공으로 대체). 실행: godot --headless --path game -s tests/run_campaign_tests.gd
 ## 테스트용 저장 경로(user://test_saves/)만 사용하며 사용자 저장(user://campaign_save.json)은 건드리지 않는다.
 ## CAMPAIGN_SYSTEMS 7절 인수 시나리오(승리 = 보스 처치)와 DUNGEON_COMBAT 8절 필수 검수 1~10 을 상태·저장·전투·화면 수준에서 확인한다.
 ## 실패가 있으면 종료 코드 1.
@@ -141,6 +141,39 @@ func stagger(e: BattleActor) -> void:
 	info.direction = 1
 	e.receive_hit(info)
 
+## HWR-005/006: 정비 = 마을에 들어가 고정 복구 현장을 설치하고 정령 공사로 완공. 군자금 40 + 목재 10 + 석재 5.
+func repair(c: CampaignController, site_id: StringName) -> Dictionary:
+	return build_in_village(c, site_id, &"repair")
+
+## HWR-005: 시설 = 관리도 60 마을에서 훈련장/보급창을 예약 자리에 설치·완공. 군자금 60 + 목재 12 + 석재 6.
+func buy_facility(c: CampaignController, site_id: StringName) -> Dictionary:
+	return build_in_village(c, site_id, &"training" if site_id == &"ch1_farm" else &"depot")
+
+func build_in_village(c: CampaignController, site_id: StringName, def_id: StringName) -> Dictionary:
+	var e := c.enter_village(site_id)
+	if not e.ok:
+		return {"ok": false, "saved": false, "reason": e.reason}
+	var t := c.data.village_template(site_id)
+	var pos: Vector2i = t.repair_site().position if def_id == &"repair" else t.facility_spot.position
+	c.sim.player_cell = t.spawn
+	var r := c.village_place(def_id, pos.x, pos.y, 0)
+	if not r.ok or not r.saved:
+		c.leave_village()
+		return r
+	# HWR-006: 빈손 정령을 배정해 도착 후 초당 5 로 공사(플레이어 직접 작업 없음). 이동 시간을 포함해 최대 60초 틱.
+	var vid := c.active_village_state().first_idle_villager()
+	var a := c.village_assign(vid, r.id)
+	if not a.ok:
+		c.leave_village()
+		return {"ok": false, "saved": false, "reason": "배정 실패: %s" % a.reason}
+	for i in int(60.0 / VillageSim.TICK):
+		c.village_tick(VillageSim.TICK)
+		if c.active_village_state().building(r.id).state == "complete":
+			break
+	var complete: bool = c.active_village_state().building(r.id).state == "complete"
+	var lv := c.leave_village()
+	return {"ok": complete, "saved": complete and lv.ok, "reason": "" if complete else "미완공"}
+
 ## 승리까지 진행한 컨트롤러 결과를 돌려주는 도우미(전투 없이 상태만).
 func win(c: CampaignController, site_id: StringName) -> Dictionary:
 	var r := c.begin_run(site_id)
@@ -279,12 +312,12 @@ func test_scenario_1_to_4_progression_and_reload() -> void:
 	check(r1.status == "committed" and r1.reward == 100 and r1.first and c.state.currency == 100, "농촌 최초 승리: +100 (%s, %d)" % [r1.status, c.state.currency])
 	check(c.state.is_liberated(&"ch1_farm") and c.state.management(&"ch1_farm") == 40, "농촌 해방, 관리도 40")
 	check(not c.state.can_enter_site(store, data).ok, "관리도 40 → 창고 잠김: %s" % c.state.can_enter_site(store, data).reason)
-	var rep := c.repair(&"ch1_farm")
-	check(rep.ok and rep.saved and c.state.management(&"ch1_farm") == 60 and c.state.currency == 60, "정비 후 관리도 60, 군자금 60")
+	var rep := repair(c, &"ch1_farm")
+	check(rep.ok and rep.saved and c.state.management(&"ch1_farm") == 60 and c.state.currency == 60, "복구 현장 완공 후 관리도 60, 군자금 60")
 	check(c.state.can_enter_site(store, data).ok, "창고 개방")
 	# 2. 훈련장
-	var buy := c.buy_facility(&"ch1_farm")
-	check(buy.ok and buy.saved and c.state.currency == 0 and c.state.has_facility(&"training_ground"), "훈련장 구매 후 군자금 0")
+	var buy := buy_facility(c, &"ch1_farm")
+	check(buy.ok and buy.saved and c.state.currency == 0 and c.state.has_facility(&"training_ground"), "훈련장 완공 후 군자금 0")
 	check(is_equal_approx(c.player_attack_power(20.0), 21.0), "공격력 20 → %.2f == 21" % c.player_attack_power(20.0))
 	# 재실행(로드) 후에도 21
 	var c2 := make_controller()
@@ -296,8 +329,8 @@ func test_scenario_1_to_4_progression_and_reload() -> void:
 	var r2 := win(c2, &"ch1_store")
 	check(r2.status == "committed" and r2.reward == 100 and c2.state.currency == 100 and c2.state.management(&"ch1_store") == 40, "창고 최초 승리 +100, 관리도 40")
 	check(not c2.state.can_enter_site(pass_site, data).ok, "초소 잠김(창고 관리도 40)")
-	check(c2.repair(&"ch1_store").saved and c2.state.management(&"ch1_store") == 60, "창고 정비 → 60")
-	check(c2.buy_facility(&"ch1_store").saved and c2.state.currency == 0, "보급창 구매 → 0")
+	check(repair(c2, &"ch1_store").saved and c2.state.management(&"ch1_store") == 60, "창고 복구 완공 → 60")
+	check(buy_facility(c2, &"ch1_store").saved and c2.state.currency == 0, "보급창 완공 → 0")
 	check(c2.player_max_hp(100) == 110, "최대 체력 100 → %d == 110" % c2.player_max_hp(100))
 	check(c2.state.can_enter_site(pass_site, data).ok, "초소 개방")
 	# 4. 초소
@@ -331,21 +364,21 @@ func test_scenario_7_8_rejections_and_no_reset() -> void:
 	var br := c.begin_run(&"ch1_store")
 	check(not br.ok, "선행 미완료 창고 출정 거부: %s" % br.reason)
 	# 미해방 정비/구매
-	check(not c.repair(&"ch1_farm").ok and not c.buy_facility(&"ch1_farm").ok and c.state.currency == 0, "미해방 거점 정비·구매 거부")
+	check(not repair(c, &"ch1_farm").ok and not buy_facility(c, &"ch1_farm").ok and c.state.currency == 0, "미해방 거점 진입·정비·시설 거부")
 	win(c, &"ch1_farm")
-	# 돈 부족: 100 → 정비 40 → 60 → 훈련장 60 → 0 → 창고 정비 불가
-	c.repair(&"ch1_farm")
-	c.buy_facility(&"ch1_farm")
+	# 돈 부족: 100 → 복구 40 → 60 → 훈련장 60 → 0 → 창고 복구 불가
+	repair(c, &"ch1_farm")
+	buy_facility(c, &"ch1_farm")
 	check(c.state.currency == 0, "군자금 0")
-	var dup := c.buy_facility(&"ch1_farm")
-	check(not dup.ok and c.state.currency == 0 and c.state.has_facility(&"training_ground"), "중복 구매 거부: %s" % dup.reason)
-	var rep2 := c.repair(&"ch1_farm")
-	check(not rep2.ok, "중복 정비 거부: %s" % rep2.reason)
+	var dup := buy_facility(c, &"ch1_farm")
+	check(not dup.ok and c.state.currency == 0 and c.state.has_facility(&"training_ground"), "중복 시설 거부: %s" % dup.reason)
+	var rep2 := repair(c, &"ch1_farm")
+	check(not rep2.ok, "중복 복구 거부: %s" % rep2.reason)
 	win(c, &"ch1_store")
-	c.repair(&"ch1_store")   # 100 → 60
-	c.buy_facility(&"ch1_store")  # → 0
-	var poor := c.repair(&"ch1_store")
-	check(not poor.ok, "이미 정비된 창고 재정비 거부")
+	repair(c, &"ch1_store")   # 100 → 60
+	buy_facility(c, &"ch1_store")  # → 0
+	var poor := repair(c, &"ch1_store")
+	check(not poor.ok, "이미 복구된 창고 재복구 거부")
 	# 잠긴 동료 선택
 	var sel := c.select_companion(&"aya")
 	check(not sel.ok and c.state.selected_companion_id == "", "해금 전 아야 선택 거부: %s" % sel.reason)
@@ -386,7 +419,7 @@ func test_scenario_11_save_failure_retry_backup() -> void:
 	check(r.status == "unsaved" and not r.saved and r.reward == 100, "저장 실패 → unsaved (%s)" % r.reason)
 	check(c.state.currency == 0 and not c.state.is_liberated(&"ch1_farm") and c.has_pending(), "메모리 상태는 이전 그대로, 후보 보관")
 	check(not c.begin_run(&"ch1_farm").ok, "미저장 상태에서는 다음 출정 거부")
-	check(not c.repair(&"ch1_farm").ok, "미저장 상태에서는 구매/정비 거부")
+	check(not c.enter_village(&"ch1_farm").ok, "미저장 상태에서는 마을 진입/정비 거부")
 	var rid: String = r.run_id
 	var same := c.resolve_run(rid, &"victory")
 	check(same.status == "unsaved" and c.state.currency == 0, "확인 연타: 여전히 미저장, 보상 없음")
@@ -437,8 +470,8 @@ func test_load_cleans_locked_companion_and_rejects_schema() -> void:
 	var c2 := make_controller()
 	var r := c2.continue_game()
 	check(r.ok and c2.state.selected_companion_id == "" and r.error.contains("정리"), "잠긴 동료 선택은 동행 없음으로 정리하고 기록: %s" % r.error)
-	# 상위 schema_version 은 읽지 않는다
-	d.schema_version = 2
+	# 상위 schema_version 은 읽지 않는다 (HWR-005 부터 현재 형식은 2)
+	d.schema_version = CampaignState.SCHEMA_VERSION + 1
 	c.store.write(d)
 	var c3 := make_controller()
 	var r3 := c3.continue_game()
@@ -1336,9 +1369,9 @@ func test_d9_boss_only_clears_and_same_tick_death_is_defeat() -> void:
 	b3.queue_free()
 	# 초소 보스 처치 → 챕터 1 클리어·아야 해금 (Battle 경로)
 	win(c3, &"ch1_farm")
-	c3.repair(&"ch1_farm")
+	repair(c3, &"ch1_farm")
 	win(c3, &"ch1_store")
-	c3.repair(&"ch1_store")
+	repair(c3, &"ch1_store")
 	br = c3.begin_run(&"ch1_pass")
 	var b4: Battle = await make_battle()
 	b4.start_encounter(data.site(&"ch1_pass"), br.run_id, null, 20.0, 100)
@@ -1617,11 +1650,11 @@ func test_scenario_5_archer_last_kill_wins_and_reward_120() -> void:
 	var c := make_controller()
 	c.new_game()
 	win(c, &"ch1_farm")
-	c.repair(&"ch1_farm")
-	c.buy_facility(&"ch1_farm")
+	repair(c, &"ch1_farm")
+	buy_facility(c, &"ch1_farm")
 	win(c, &"ch1_store")
-	c.repair(&"ch1_store")
-	c.buy_facility(&"ch1_store")
+	repair(c, &"ch1_store")
+	buy_facility(c, &"ch1_store")
 	win(c, &"ch1_pass")
 	check(c.state.currency == 100 and c.state.is_companion_unlocked(&"aya"), "초소까지 클리어, 군자금 100")
 	var sel := c.select_companion(&"aya")
@@ -2171,18 +2204,17 @@ func test_game_screens_smoke() -> void:
 	g._after_result()
 	await process_frame
 	check(g.current_screen == "map", "확인 → 지도")
-	g.show_manage(&"ch1_farm")
+	g.show_village(&"ch1_farm")
 	await process_frame
-	check(g.current_screen == "manage", "관리 화면")
-	g._do_repair(&"ch1_farm")
+	check(g.current_screen == "village" and g.village_view != null, "마을 장면(HWR-005)")
+	g._leave_village()
 	await process_frame
-	check(g.campaign.state.management(&"ch1_farm") == 60, "관리 화면 정비")
-	g._do_buy(&"ch1_farm")
-	await process_frame
-	check(g.campaign.state.has_facility(&"training_ground") and g.campaign.state.currency == 30, "관리 화면 훈련장 구매 (군자금 %d)" % g.campaign.state.currency)
+	check(g.current_screen == "map", "마을에서 지도로")
+	check(repair(g.campaign, &"ch1_farm").ok and g.campaign.state.management(&"ch1_farm") == 60, "복구 현장 완공 → 관리도 60")
+	check(buy_facility(g.campaign, &"ch1_farm").ok and g.campaign.state.has_facility(&"training_ground") and g.campaign.state.currency == 30, "훈련장 완공 (군자금 %d)" % g.campaign.state.currency)
 	g.show_manage(&"ch1_pass")
 	await process_frame
-	check(g.current_screen == "map", "초소는 관리 화면 없음 → 지도")
+	check(g.current_screen == "map", "초소는 마을 장면 없음 → 지도")
 	g.show_companions()
 	await process_frame
 	check(g.current_screen == "companions", "동료 선택 화면")

@@ -1,0 +1,34 @@
+[gd_resource type="Resource" script_class="BuildingDef" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/data/building_def.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = &"lumber"
+display_name = "벌목소"
+description = "숲 작업 구역에 접한 2×2. 주민 1명이 20초마다 목재 6 (식량 없이 시작한 주기는 3)."
+kind = &"lumber"
+size = Vector2i(2, 2)
+cost_currency = 0
+cost_wood = 12
+cost_stone = 2
+work_required = 30.0
+placement = &"forest_adjacent"
+rotatable = true
+movable = true
+demolishable = true
+walkable = false
+needs_door = true
+max_per_village = 0
+requires_management = 0
+site_id = &""
+water_capacity = 0
+produce_kind = &"wood"
+produce_amount = 6
+produce_amount_unfed = 3
+cycle_seconds = 20.0
+eats_food = true
+needs_water = false
+villagers_on_complete = 0
+facility_id = &""
+management_on_complete = 0
