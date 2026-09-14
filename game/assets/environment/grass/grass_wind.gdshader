@@ -1,5 +1,5 @@
 // HWR-GRASS-001 grass tile material: baked albedo/normal + vertex-colour wind mask.
-// COLOR.r = bend mask (0 dirt wall / grass root, 1 grass tip). The dirt never moves.
+// UV2.x = bend mask (0 dirt wall / grass root, 1 grass tip), UV2.y = part id. The dirt never moves.
 // Wind phase is computed from WORLD position and TIME, so neighbouring tiles (and rotated
 // instances) share one continuous wave. Works for MultiMesh (MODEL_MATRIX is per instance).
 shader_type spatial;
@@ -21,8 +21,10 @@ uniform float wind_gust : hint_range(0.0, 1.0) = 0.45;      // slow strength mod
 uniform float wind_sheen : hint_range(0.0, 0.3) = 0.07;     // brightness ripple following the wave
 
 varying float v_wind;
+varying vec3 v_tint;
 
 void vertex() {
+	v_tint = mix(vec3(1.0), INSTANCE_CUSTOM.rgb, INSTANCE_CUSTOM.a);   // per-instance tint (MultiMesh custom data)
 	vec3 wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	vec2 d = normalize(wind_dir);
 	float k = 6.2831853 / max(wind_wavelength, 0.01);
@@ -30,7 +32,7 @@ void vertex() {
 	float phase = k * (along - wind_speed * TIME);
 	float sway = sin(phase) * 0.7 + sin(phase * 2.31 + 1.7) * 0.3;
 	float gust = 1.0 + wind_gust * sin(0.37 * TIME + 0.22 * along + 0.9 * wp.z);
-	float mask = COLOR.r;
+	float mask = UV2.x;
 	float amount = wind_strength * mask * gust;
 	// lean with the wind plus travelling sway; the mask keeps the wall/root fixed
 	vec2 disp = d * wind_amplitude * amount * (0.35 + sway);
@@ -40,12 +42,16 @@ void vertex() {
 
 void fragment() {
 	vec4 c = texture(albedo_tex, UV);
-	vec3 tint = mix(vec3(1.0), INSTANCE_CUSTOM.rgb, INSTANCE_CUSTOM.a);
-	ALBEDO = c.rgb * tint * (1.0 + wind_sheen * v_wind);
+	ALBEDO = c.rgb * v_tint * (1.0 + wind_sheen * v_wind);
 	ALPHA = c.a;
 	ALPHA_SCISSOR_THRESHOLD = alpha_scissor;
-	NORMAL_MAP = texture(normal_tex, UV).rgb;
-	NORMAL_MAP_DEPTH = normal_strength;
+	if (UV2.y > 0.75) {
+		// fin cards: shade like the turf under them whichever side faces the camera (Godot flips back-face normals)
+		NORMAL = normalize((VIEW_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+	} else {
+		NORMAL_MAP = texture(normal_tex, UV).rgb;
+		NORMAL_MAP_DEPTH = normal_strength;
+	}
 	ROUGHNESS = roughness;
 	METALLIC = 0.0;
 }

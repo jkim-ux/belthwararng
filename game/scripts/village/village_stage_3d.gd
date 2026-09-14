@@ -285,6 +285,10 @@ const COL_FOREST := Color(0.3, 0.5, 0.3)
 const COL_ROCK := Color(0.6, 0.58, 0.55)
 const COL_DAM_SITE := Color(0.55, 0.64, 0.7)
 const COL_REPAIR_SITE := Color(0.62, 0.52, 0.42)
+## HWR-GRASS-001: baked grass tiles cover open ground, forest floor and the entrance; water, paths,
+## fields, rock and construction sites keep the flat terrain colour.
+const GRASS_TERRAIN := [".", "W", "e"]
+var grass: GrassField
 
 func _terrain_color(t: String) -> Color:
 	match t:
@@ -328,6 +332,16 @@ func _build_terrain() -> void:
 	m.cull_mode = BaseMaterial3D.CULL_BACK   # Godot 앞면은 시계 방향. 윗면이 조명을 받아야 한다.
 	mi.material_override = m
 	terrain_root.add_child(mi)
+	# 풀 타일: 칸마다 MultiMesh 인스턴스 1개(지역별 묶음). 논리 칸·길찾기·클릭 판정(Y=0 평면)은 그대로.
+	grass = GrassField.new()
+	grass.name = "Grass"
+	terrain_root.add_child(grass)
+	var grass_cells: Array = []
+	for y in VillageTemplate.HEIGHT:
+		for x in VillageTemplate.WIDTH:
+			if GRASS_TERRAIN.has(template.terrain_at(Vector2i(x, y))):
+				grass_cells.append(Vector2i(x, y))
+	grass.build(grass_cells, CELL_W, CELL_D)
 	# 강 반짝임 줄(정적)
 	for y in VillageTemplate.HEIGHT:
 		for x in VillageTemplate.WIDTH:
@@ -505,6 +519,14 @@ func sync_buildings(vs: VillageState, sim: VillageSim, water: Dictionary) -> voi
 			_remove_dam_wheels(building_nodes[id].node)
 			building_nodes[id].node.queue_free()
 			building_nodes.erase(id)
+	# 설치·공사 중 건물 발밑의 풀 타일은 숨긴다(미리보기는 풀 위에 반투명으로 보인다).
+	if grass != null:
+		var covered: Array = []
+		for id in live.keys():
+			var b: Dictionary = vs.buildings[id]
+			if sim.def_of(b) != null:
+				covered.append_array(sim.cells_of(b))
+		grass.set_hidden_cells(covered)
 
 func _remove_dam_wheels(n: Node3D) -> void:
 	for i in range(dam_wheels.size() - 1, -1, -1):

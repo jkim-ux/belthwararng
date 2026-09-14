@@ -3,10 +3,10 @@
 Per Z band (variant a / b) this builds ONE mesh, ONE material, ONE 2048x1536 atlas set:
   * turf   : 128x64 height-field sampled from the top-down height bake (world 2.0 x 0.9, one village cell)
   * wall   : dirt strip around the four sides, top edge welded to the turf edge, bottom at -WALL_DEPTH
-  * fins   : four alpha-scissor cards on the edges carrying the front-view grass-tip silhouette
-Edges are blended toward one symmetric profile shared by both variants, so any tile (also rotated
-180 deg) meets any neighbour without a height step or a texture seam.
-Vertex colour R = wind bend mask (0 wall/root .. 1 tip), G = part id (0 turf, 0.5 wall, 1 fin).
+  * fins   : two alpha-scissor cards on the near/far edges carrying the front-view grass-tip silhouette
+Heights, colour and normals of the outer band are cross-faded into one shared, mirror-symmetric 2D edge patch,
+so any tile (also rotated 180 deg) meets any neighbour without a height step or a texture seam.
+TEXCOORD_1 (UV2).x = wind bend mask (0 wall/root .. 1 tip), .y = part id (0 turf, 0.5 wall, 1 fin).
 
 Usage: python3 build_grass_tile.py <build_dir> <out_dir> [--grid 128x64]
 """
@@ -31,8 +31,7 @@ WALL_ROWS, FIN_ROWS = 256, 256
 WALL_DEPTH = 0.2                         # world units below the y=0 reference (canal water sits at -0.12)
 WALL_SRC_TOP = 0.05                      # source height of the vertical dirt wall used for the wall strip
 FIN_SRC_BOTTOM, FIN_SRC_TOP = 0.045, SIDE_H
-BLEND_X, BLEND_Z = 0.05, 0.08            # fraction of the tile width/depth whose texture blends into the shared edge band
-EDGE_CELLS = 4                           # grid cells over which vertex heights ramp to the shared edge profile
+BLEND_X, BLEND_Z = 0.035, 0.05           # fraction of the tile width/depth whose texture blends into the shared edge band
 FIN_OFFSET = 0.003                       # world units outside the wall plane
 EPS = 0.002
 
@@ -73,6 +72,9 @@ def load_band(band):
     n_gltf[flip] *= -1.0
     bad = h < 0.03                       # rays that fell through to the bottom face / outside the wall
     h = fill_holes(h, bad)
+    c = np.stack([fill_holes(c[..., k], bad) for k in range(3)], axis=-1)
+    n_gltf = np.stack([fill_holes(n_gltf[..., k], bad) for k in range(3)], axis=-1)
+    n_gltf /= np.maximum(np.linalg.norm(n_gltf, axis=-1, keepdims=True), 1e-6)
     return c, n_gltf, h, int(bad.sum())
 
 
@@ -106,41 +108,30 @@ def edge_band_z(arr, n, flip_sign=None):
     return 0.5 * (band + rev)
 
 
-def apply_edge_blend(arr, band_x, band_z, wx, wz):
+def apply_edge_blend(arr, band_x, band_z, wx, wz, mirror_comp=None):
     """Cross-fade the outer texels of arr (H, W, C) into the shared 2D edge bands (mirrored at each edge),
-    so the seam line of every tile carries identical texels and the blend region still looks like grass."""
+    so the seam line of every tile carries identical texels and the blend region still looks like grass.
+    For normal maps the mirrored copy negates the component across the seam (mirror_comp = (x_comp, z_comp))."""
     out = arr.astype(np.float64).copy()
     H, W = out.shape[:2]
     bx, bz = band_x.shape[1], band_z.shape[0]
+    band_x, band_z = band_x.copy(), band_z.copy()
+    mx, mz = band_x[:, ::-1].copy(), band_z[::-1].copy()
+    if mirror_comp is not None:
+        cx, cz = mirror_comp
+        # the mirrored component must vanish on the seam line for both sides to agree
+        band_x[..., cx] *= (np.arange(bx) / bx)[None, :]
+        band_z[..., cz] *= (np.arange(bz) / bz)[:, None]
+        mx, mz = band_x[:, ::-1].copy(), band_z[::-1].copy()
+        mx[..., cx] *= -1.0
+        mz[..., cz] *= -1.0
     w = wx[:bx][None, :, None]
     out[:, :bx] = out[:, :bx] * (1 - w) + band_x * w
-    out[:, W - bx:] = out[:, W - bx:] * (1 - w[:, ::-1]) + band_x[:, ::-1] * w[:, ::-1]
+    out[:, W - bx:] = out[:, W - bx:] * (1 - w[:, ::-1]) + mx * w[:, ::-1]
     w = wz[:bz][:, None, None]
     out[:bz] = out[:bz] * (1 - w) + band_z * w
-    out[H - bz:] = out[H - bz:] * (1 - w[::-1]) + band_z[::-1] * w[::-1]
+    out[H - bz:] = out[H - bz:] * (1 - w[::-1]) + mz * w[::-1]
     return out
-
-
-def symmetric_profile(edges):
-    """Mean of the given edge profiles and their reversals -> identical for rot-180 neighbours."""
-    stack = [e for e in edges] + [e[::-1] for e in edges]
-    return np.mean(np.stack(stack), axis=0)
-
-
-def ramp_grid_edges(g, prof_x, prof_z, cells):
-    """Force the grid edge heights to the shared profiles and ramp neighbouring rows/cols toward them."""
-    g = g.copy()
-    for k in range(cells + 1):
-        w = 1.0 - k / cells
-        w = 3 * w * w - 2 * w * w * w
-        g[:, k] = g[:, k] * (1 - w) + prof_x * w
-        g[:, -1 - k] = g[:, -1 - k] * (1 - w) + prof_x * w
-    for k in range(cells + 1):
-        w = 1.0 - k / cells
-        w = 3 * w * w - 2 * w * w * w
-        g[k, :] = g[k, :] * (1 - w) + prof_z * w
-        g[-1 - k, :] = g[-1 - k, :] * (1 - w) + prof_z * w
-    return g
 
 
 def grid_sample(h2d, gx, gz, pct=70):
@@ -186,20 +177,25 @@ def grid_normals(pos):
 t0 = time.time()
 bands = {b: load_band(b) for b in ("a", "b")}
 side = np.load(os.path.join(BUILD, "side_color.npy"))            # (256, 2048, 4) linear, row 0 = top (z = SIDE_H)
+side[..., :3] /= np.maximum(side[..., 3:4], 1e-3)                # Blender writes premultiplied alpha; cards need straight colour
 # shared 2D edge bands (colour + normal) taken from variant a's far/left edge, symmetric for rot-180 tiles
 BX, BZ = int(round(TOP_W * BLEND_X)), int(round(TOP_H * BLEND_Z))
 band_c_x, band_c_z = edge_band_x(bands["a"][0], BX), edge_band_z(bands["a"][0], BZ)
 band_n_x, band_n_z = edge_band_x(bands["a"][1], BX, flip_sign=2), edge_band_z(bands["a"][1], BZ, flip_sign=0)
 wx, wz = blend_weights(TOP_W, BLEND_X), blend_weights(TOP_H, BLEND_Z)
 
-# vertex grids: edges of every variant ramp to one symmetric shared height profile, so any tile meets any tile
+# heights blend into the same 2D edge band, so the seam geometry of every tile is identical (and mirrored)
+band_h_x, band_h_z = edge_band_x(bands["a"][2][..., None], BX)[..., 0], edge_band_z(bands["a"][2][..., None], BZ)[..., 0]
 grids = {}
 for b, (c, n, h, holes) in bands.items():
-    grids[b] = grid_sample(h, GRID_X, GRID_Z)
-prof_x = symmetric_profile([grids[b][:, 0] for b in grids] + [grids[b][:, -1] for b in grids])
-prof_z = symmetric_profile([grids[b][0, :] for b in grids] + [grids[b][-1, :] for b in grids])
-for b in grids:
-    grids[b] = ramp_grid_edges(grids[b], prof_x, prof_z, EDGE_CELLS)
+    hb = apply_edge_blend(h[..., None], band_h_x[..., None], band_h_z[..., None], wx, wz)[..., 0]
+    g = grid_sample(hb, GRID_X, GRID_Z)
+    # the mirrored band makes both edges equal up to sampling noise; make them exactly equal and symmetric
+    ex = 0.5 * (g[:, 0] + g[:, -1]); ex = 0.5 * (ex + ex[::-1])
+    ez = 0.5 * (g[0, :] + g[-1, :]); ez = 0.5 * (ez + ez[::-1])
+    g[:, 0] = g[:, -1] = ex
+    g[0, :] = g[-1, :] = ez
+    grids[b] = g
 Y0 = min(float(grids[b].min()) for b in grids) - EPS
 print(f"source->world scale {S:.4f}, y reference (source) {Y0:.4f}, grid {GRID_X}x{GRID_Z}")
 
@@ -230,6 +226,10 @@ fin_block = np.asarray(Image.fromarray((np.clip(fin_src, 0, 1) * 255).astype(np.
 # grass only: dirt-coloured texels of the rounded edge are cut so interior seams never show brown
 dirt = (fin_block[..., 0] > fin_block[..., 1] * 0.95)
 fin_block[..., 3] = np.where(dirt, 0.0, fin_block[..., 3])
+# drop isolated specks (single anti-aliased texels that would float above the grass after alpha scissor)
+a = fin_block[..., 3]
+neigh = sum(np.roll(np.roll(a, dy, 0), dx, 1) for dy in (-1, 0, 1) for dx in (-1, 0, 1)) / 9.0
+fin_block[..., 3] = np.where(neigh < 0.3, 0.0, a)
 FIN_Y0, FIN_Y1 = (FIN_SRC_BOTTOM - Y0) * S, (FIN_SRC_TOP - Y0) * S
 
 
@@ -238,7 +238,7 @@ def build_variant(band):
     c, n, h, holes = bands[band]
     g = grids[band]
     cb = apply_edge_blend(c, band_c_x, band_c_z, wx, wz)
-    nb = apply_edge_blend(n, band_n_x, band_n_z, wx, wz)
+    nb = apply_edge_blend(n, band_n_x, band_n_z, wx, wz, mirror_comp=(0, 2))
     nb /= np.maximum(np.linalg.norm(nb, axis=-1, keepdims=True), 1e-6)
 
     # --- turf grid
@@ -271,7 +271,7 @@ def build_variant(band):
     base = W1 * (GRID_Z + 1)
 
     # --- walls: (edge vertices in order, outward normal, u fraction of the atlas used)
-    def wall(edge_pts, outward, u_span):
+    def wall(edge_pts, edge_mask, outward, u_span):
         nonlocal base
         m = len(edge_pts)
         top = np.array(edge_pts)
@@ -285,7 +285,8 @@ def build_variant(band):
         N = np.tile(np.array(outward, dtype=float), (2 * m, 1))
         T = np.tile(np.array([-outward[2], 0.0, outward[0], 1.0]), (2 * m, 1))
         UV = np.concatenate([np.stack([u, np.full(m, v_top)], 1), np.stack([u, v_bot], 1)])
-        C = np.tile(np.array([0.0, 0.5, 0.0, 1.0]), (2 * m, 1))
+        # top row is welded to the turf edge, so it must carry the same bend mask or the wind opens a crack
+        C = np.concatenate([np.stack([np.asarray(edge_mask), np.full(m, 0.5), np.zeros(m), np.ones(m)], 1), np.tile(np.array([0.0, 0.5, 0.0, 1.0]), (m, 1))])
         V_pos.append(P); V_nrm.append(N); V_tan.append(T); V_uv.append(UV); V_col.append(C)
         ids = []
         for k in range(m - 1):
@@ -304,10 +305,10 @@ def build_variant(band):
     back = pos[0, :, :]
     left = pos[:, 0, :]
     right = pos[:, -1, :]
-    idx += wall(list(front), (0, 0, 1), 1.0)
-    idx += wall(list(back[::-1]), (0, 0, -1), 1.0)
-    idx += wall(list(left), (-1, 0, 0), CELL_D / CELL_W)
-    idx += wall(list(right[::-1]), (1, 0, 0), CELL_D / CELL_W)
+    idx += wall(list(front), mask[-1, :], (0, 0, 1), 1.0)
+    idx += wall(list(back[::-1]), mask[0, ::-1], (0, 0, -1), 1.0)
+    idx += wall(list(left), mask[:, 0], (-1, 0, 0), CELL_D / CELL_W)
+    idx += wall(list(right[::-1]), mask[::-1, -1], (1, 0, 0), CELL_D / CELL_W)
 
     # --- fins (double sided cards just outside each wall)
     def fin(p0, p1, outward, u0, u1):
@@ -315,7 +316,7 @@ def build_variant(band):
         o = np.array(outward, dtype=float) * FIN_OFFSET
         p0, p1 = np.array(p0, dtype=float) + o, np.array(p1, dtype=float) + o
         P = np.array([[p0[0], FIN_Y0, p0[2]], [p1[0], FIN_Y0, p1[2]], [p0[0], FIN_Y1, p0[2]], [p1[0], FIN_Y1, p1[2]]])
-        N = np.tile(np.array(outward, dtype=float), (4, 1))
+        N = np.tile(np.array([0.0, 1.0, 0.0]), (4, 1))        # up-normals: cards shade like the turf, not like walls
         T = np.tile(np.array([-outward[2], 0.0, outward[0], 1.0]), (4, 1))
         v_top = (TOP_H + WALL_ROWS) / ATLAS_H
         v_bot = 1.0
@@ -327,11 +328,10 @@ def build_variant(band):
         return ids
 
     hw, hd = CELL_W / 2, CELL_D / 2
-    us = CELL_D / CELL_W
+    # only the near/far edges get cards: the village camera looks along -Z, so cards on the +-X edges
+    # would be seen edge-on as thin vertical lines at every column seam
     idx += fin((-hw, 0, hd), (hw, 0, hd), (0, 0, 1), 0.0, 1.0)
     idx += fin((hw, 0, -hd), (-hw, 0, -hd), (0, 0, -1), 0.0, 1.0)
-    idx += fin((-hw, 0, -hd), (-hw, 0, hd), (-1, 0, 0), 0.5, 0.5 + us)
-    idx += fin((hw, 0, hd), (hw, 0, -hd), (1, 0, 0), 0.05, 0.05 + us)
 
     P = np.concatenate(V_pos).astype(np.float32)
     N = np.concatenate(V_nrm).astype(np.float32)
@@ -368,7 +368,7 @@ def build_variant(band):
     stats = {
         "holes_filled_texels": holes,
         "turf_height_world_min": float(Y.min()), "turf_height_world_mean": float(Y.mean()), "turf_height_world_max": float(Y.max()),
-        "turf_tris": GRID_X * GRID_Z * 2, "wall_tris": 2 * (2 * GRID_X + 2 * GRID_Z), "fin_tris": 8,
+        "turf_tris": GRID_X * GRID_Z * 2, "wall_tris": 2 * (2 * GRID_X + 2 * GRID_Z), "fin_tris": 4,
     }
     return P, N, T, UV, C, I, color_png, normal_png, stats
 
@@ -404,7 +404,7 @@ def write_glb(path, name, P, N, T, UV, C, I, color_png, normal_png, extras):
     a_nrm = acc(N, 5126, "VEC3", 34962)
     a_tan = acc(T, 5126, "VEC4", 34962)
     a_uv = acc(UV, 5126, "VEC2", 34962)
-    a_col = acc(C, 5126, "VEC4", 34962)
+    a_col = acc(np.ascontiguousarray(C[:, :2]), 5126, "VEC2", 34962)   # UV2: x = bend mask, y = part id (COLOR_0 would tint a plain import)
     a_idx = acc(I.reshape(-1, 1), 5125, "SCALAR", 34963)
     bv_color = add(img_bytes(color_png))
     bv_normal = add(img_bytes(normal_png))
@@ -414,7 +414,7 @@ def write_glb(path, name, P, N, T, UV, C, I, color_png, normal_png, extras):
         "scenes": [{"nodes": [0]}],
         "nodes": [{"name": name, "mesh": 0, "extras": extras}],
         "meshes": [{"name": name, "primitives": [{
-            "attributes": {"POSITION": a_pos, "NORMAL": a_nrm, "TANGENT": a_tan, "TEXCOORD_0": a_uv, "COLOR_0": a_col},
+            "attributes": {"POSITION": a_pos, "NORMAL": a_nrm, "TANGENT": a_tan, "TEXCOORD_0": a_uv, "TEXCOORD_1": a_col},
             "indices": a_idx, "material": 0, "mode": 4}]}],
         "materials": [{"name": name + "_mat", "doubleSided": True, "alphaMode": "MASK", "alphaCutoff": 0.5,
                        "pbrMetallicRoughness": {"baseColorTexture": {"index": 0}, "metallicFactor": 0.0, "roughnessFactor": 0.92},
@@ -460,7 +460,7 @@ manifest = {
     "source_to_world_scale": S,
     "source_y_reference": Y0,
     "sampled_source_footprint": {"x_half": meta["x_half"], "z_band": meta["band"], "bands": meta["bands"]},
-    "fixed_parts": "wall (COLOR.g=0.5) and turf roots have bend mask COLOR.r=0; tips reach 1",
+    "fixed_parts": "UV2.x = bend mask: wall (UV2.y=0.5) and turf roots are 0, tips reach 1",
     "atlas": {"size": [TOP_W, ATLAS_H], "rows": {"turf": [0, TOP_H], "wall": [TOP_H, TOP_H + WALL_ROWS], "fin": [TOP_H + WALL_ROWS, ATLAS_H]},
               "color": "sRGB RGBA (alpha only used by fins)", "normal": "tangent-space, +Y up (glTF), roughness constant 0.92 (source RM map is flat: rough 0.92+-0.04, metal ~0)"},
     "lod": "LOD0 in the GLB; Godot importer meshes/generate_lods generates further levels (see report)",

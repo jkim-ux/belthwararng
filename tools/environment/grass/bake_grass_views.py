@@ -32,7 +32,7 @@ HEIGHT_MAX = 0.2                           # height pass = z_blender / HEIGHT_MA
 SIDE_H = 0.15                              # front strip covers z_blender in [0, SIDE_H]
 SIDE_DEPTH = 0.07                          # front band depth used for the fin card
 BANDS = {
-    "a": Z_CENTER - Z_HALF + BAND / 2.0,   # far half of the block (glTF -Z)
+    "a": Z_CENTER - Z_HALF + BAND / 2.0 + 0.015,   # far half; the far mound edge retreats ~0.012 further than the near one
     "b": Z_CENTER + Z_HALF - BAND / 2.0,   # near half (glTF +Z)
 }
 

@@ -22,16 +22,16 @@
  "pivot": "tile centre; y=0 = lowest turf/dirt point (village ground plane); walls extend to -WALL_DEPTH",
  "wall_depth_world": 0.2,
  "source_to_world_scale": 2.1978021978021975,
- "source_y_reference": 0.05991299142929431,
+ "source_y_reference": 0.057082989689008684,
  "sampled_source_footprint": {
   "x_half": 0.455,
   "z_band": 0.40950000000000003,
   "bands": {
-   "a": -0.25075000000000003,
+   "a": -0.23575000000000002,
    "b": 0.24975
   }
  },
- "fixed_parts": "wall (COLOR.g=0.5) and turf roots have bend mask COLOR.r=0; tips reach 1",
+ "fixed_parts": "UV2.x = bend mask: wall (UV2.y=0.5) and turf roots are 0, tips reach 1",
  "atlas": {
   "size": [
    2048,
@@ -58,32 +58,32 @@
  "variants": {
   "a": {
    "file": "grass/grass_tile_a.glb",
-   "bytes": 6454908,
-   "sha256": "d2ae7a06bda9cc5ef42fd1bd9cfd44fe964a28445fc4dc465bf6be28750bd28a",
-   "verts": 9177,
-   "tris": 17160,
-   "holes_filled_texels": 39058,
-   "turf_height_world_min": 0.009119795781515545,
-   "turf_height_world_mean": 0.0996911484898079,
-   "turf_height_world_max": 0.1874765919570845,
+   "bytes": 7826956,
+   "sha256": "af3f0cea8fc3d7d0c5c1819c821f3d6cbba92ab84bd80d5a2338d81e239399de",
+   "verts": 9169,
+   "tris": 17156,
+   "holes_filled_texels": 0,
+   "turf_height_world_min": 0.004395604395604399,
+   "turf_height_world_mean": 0.10337641192887248,
+   "turf_height_world_max": 0.19369637600166828,
    "turf_tris": 16384,
    "wall_tris": 768,
-   "fin_tris": 8
+   "fin_tris": 4
   },
   "b": {
    "file": "grass/grass_tile_b.glb",
-   "bytes": 6574028,
-   "sha256": "8bf98f021b6cfb237b741a9949e394f5f7973370bd1ac4c6ef9c038e3309080b",
-   "verts": 9177,
-   "tris": 17160,
+   "bytes": 7960584,
+   "sha256": "557e0d945ada05f2efb430b8d4388d8c4ab50da8dc37671603f7a4655ec64e98",
+   "verts": 9169,
+   "tris": 17156,
    "holes_filled_texels": 40113,
-   "turf_height_world_min": 0.004395604395604399,
-   "turf_height_world_mean": 0.10006036995853615,
-   "turf_height_world_max": 0.18490104905649601,
+   "turf_height_world_min": 0.0045008108591939695,
+   "turf_height_world_mean": 0.10114618883986659,
+   "turf_height_world_max": 0.1911208331010798,
    "turf_tris": 16384,
    "wall_tris": 768,
-   "fin_tris": 8
+   "fin_tris": 4
   }
  },
- "seconds": 7.8
+ "seconds": 8.9
 }
