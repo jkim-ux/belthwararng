@@ -1,9 +1,10 @@
 # 마을 환경 에셋 — Tripo 제작 목록
 
 작성: 2026-09-14 UTC
-관련 경량화 지시: [HWR-GRASS-001](../TO_CLAUDE_GRASS.md)
+관련 작업: [풀 HWR-GRASS-001](../TO_CLAUDE_GRASS.md) / [환경 9종 HWR-ENV-001](../TO_CLAUDE_ENVIRONMENT.md)
+원본 상세: [파일 경로·SHA-256 목록](ENVIRONMENT_SOURCE_INVENTORY.json)
 
-사용자가 요청한 현재 마을의 환경·시설을 단독 콘셉트 이미지로 제작하는 목록이다. 이미 만든 풀밭과 곧은 줄기 나무 외에 21종을 준비한다. 이는 마을 세계관이나 게임 기능을 추가하는 기획 변경이 아니다.
+사용자가 요청한 현재 마을의 환경·시설을 단독 콘셉트 이미지로 제작하는 목록이다. 풀밭과 곧은 줄기 나무 외에 단독 콘셉트 이미지 21종을 제공했다. 콘셉트 이미지 수와 업로드된 3D 모델 수는 다르다. 이는 마을 세계관이나 게임 기능을 추가하는 기획 변경이 아니다.
 
 ## 아트와 이미지 사용
 
@@ -43,16 +44,30 @@
 
 ## 실제 원본 폴더와 업로드 현황
 
-사용자가 정한 `source_assets/environments/` 구조를 기준으로 계속 모은다. 기존 파일을 문서의 옛 예시 이름이나 경로로 옮길 필요는 없다.
+사용자가 정한 `source_assets/environments/` 구조를 유지한다. `objects/`는 개별 물체/건물, `tiles/`는 반복 지면이다. 기존 파일을 예시 이름으로 바꾸거나 재업로드할 필요는 없다.
 
-| 폴더 | 보관 대상 | 확인된 원본 |
-|---|---|---|
-| `source_assets/environments/objects/` | 나무·울타리·바위·꽃상자·작물·주택·시설 등 개별 물체 | `tree 3d model.glb` |
-| `source_assets/environments/tiles/` | 풀밭·바닥·길 등 반복 지면 부품 | `grass block 3d model.glb` |
+**2026-09-14 원격 확인: 풀 1종 + 환경 9종.**
 
-2026-09-14 `claude/magical-bohr-2eljuj`의 `a166113c74a9ea6107dfd7174c8791a64ca1a8e4`에서 두 파일의 LFS 포인터와 GLB 추적 설정을 확인했다. 포인터 기준 풀은 60,363,036 bytes, 나무는 57,545,824 bytes다. 풀 해시는 이전 첨부 원본과 일치한다. LFS 실물 다운로드와 나무의 메시 검사는 별도 수행해야 한다.
+| 실제 파일명 | 하위 폴더 | 담당/기존 표시 ID | 원본이 확인된 위치 |
+|---|---|---|---|
+| `fence.glb` | objects | fence | claude/hwr-grass-001 |
+| `greenhouse.glb` | objects | greenhouse | claude/hwr-grass-001 |
+| `rock.glb` | objects | rock | main |
+| `signpost.glb` | objects | cloud_sign | claude/hwr-grass-001 |
+| `stone well.glb` | objects | well | main |
+| `stone workbench.glb` | objects | quarry | claude/hwr-grass-001 |
+| `tree 3d model.glb` | objects | tree / flower_tree | main |
+| `warehouse.glb` | objects | shed | main |
+| `wood workbench.glb` | objects | lumber | claude/hwr-grass-001 |
+| `grass block 3d model.glb` | tiles | 풀 담당 | main |
 
-모델 원본은 이 구현 브랜치, 본 제작 목록과 풀 지시서는 main에 있으므로 작업자는 둘을 구분해서 가져온다. 원본은 그대로 보관하고 게임용 경량화 결과는 `game/assets/environment/` 아래에 별도 출력한다. 사용자가 나머지를 순차 업로드하면 이 폴더들을 조사해 입력 목록을 갱신한다.
+게임 구현은 main `22a21cf974479cb6fc213fe9c0120e31520db6d1`에 병합됐다. 나머지 5개 원본은 풀 브랜치 `5544f88aa4c17a288f655fffd348ea19e90dce42`에 있으며, 같은 커밋에 풀 셰이더/제작 도구/중간 파일도 있다. 환경 담당은 새 worktree에서 **원본 경로만** 가져온다. 해당 커밋 통째 cherry-pick/병합은 하지 않는다. [환경 작업 지시](../TO_CLAUDE_ENVIRONMENT.md)의 절차를 따른다.
+
+여기서는 Git tree와 LFS 포인터를 확인했다. 실물 다운로드·새 원본의 면수/UV 검사는 담당자가 수행하고 결과를 기록한다. 우물 해시는 대화에서 수정·검수한 투명 물 버전과 일치한다. 해당 물 재질과 수면 아래 깊이를 보존한다.
+
+꽃상자·가로등·바구니·밭/작물·수로·물레·주택·수련장·보 등 표에 없는 원본은 확인 시점에 미업로드다. 기존 표시를 유지하고 실제 새 파일이 들어오면 같은 절차로 입력 목록을 갱신한다. 이미지가 있다는 이유로 GLB도 모두 있다고 가정하지 않는다.
+
+원본은 LFS에 보관하고 경량화 결과만 `game/assets/environment/objects/` 및 풀 담당 폴더에서 사용한다. 입력 파일별 정확한 크기와 해시는 [inventory](ENVIRONMENT_SOURCE_INVENTORY.json)를 참고한다.
 
 ## 사용자 제작 순서
 

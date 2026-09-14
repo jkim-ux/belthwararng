@@ -1,0 +1,139 @@
+{
+  "task": "HWR-ENV-001",
+  "checked_at": "2026-09-14",
+  "main_commit": "22a21cf974479cb6fc213fe9c0120e31520db6d1",
+  "grass_branch": "claude/hwr-grass-001",
+  "grass_commit": "5544f88aa4c17a288f655fffd348ea19e90dce42",
+  "evidence": "Git tree and LFS pointer metadata; this instruction update did not download and inspect all binary meshes.",
+  "assets": [
+    {
+      "bytes": 57292500,
+      "git_blob": "1da9a2cae0fa21e2a5a34c2075ca460faa8b2bd6",
+      "oid": "07aa0d46e74be91c05257b2ed1ba6a3738f23eb1f517183c6a572a68ba228df5",
+      "path": "source_assets/environments/objects/fence.glb",
+      "task": "HWR-ENV-001",
+      "available_on_main": false,
+      "source_commit": "5544f88aa4c17a288f655fffd348ea19e90dce42",
+      "existing_asset_ids": [
+        "fence"
+      ],
+      "binary_geometry_review": "Pending implementer inspection."
+    },
+    {
+      "bytes": 52862044,
+      "git_blob": "64361606abb0d368df1f2e0edddb42cad24c779e",
+      "oid": "be9e64d18bce909e8d798bf6ba5ccc9ddbfc73edd988b7efdacea3daa7d69d61",
+      "path": "source_assets/environments/objects/greenhouse.glb",
+      "task": "HWR-ENV-001",
+      "available_on_main": false,
+      "source_commit": "5544f88aa4c17a288f655fffd348ea19e90dce42",
+      "existing_asset_ids": [
+        "greenhouse"
+      ],
+      "binary_geometry_review": "Pending implementer inspection."
+    },
+    {
+      "bytes": 60104076,
+      "git_blob": "23a7b1529fed345dfaa9b02298f61a2b3a3b5fcc",
+      "oid": "dbb66d2876eb81926a40392a340d6af600f08bc39c850d48d898d68e83ede806",
+      "path": "source_assets/environments/objects/rock.glb",
+      "task": "HWR-ENV-001",
+      "available_on_main": true,
+      "source_commit": "22a21cf974479cb6fc213fe9c0120e31520db6d1",
+      "existing_asset_ids": [
+        "rock"
+      ],
+      "binary_geometry_review": "Pending implementer inspection."
+    },
+    {
+      "bytes": 57983004,
+      "git_blob": "43010b439827674cc99366c32e242a5561e18c2b",
+      "oid": "f92391d01caf36363e16199ec3eca441d12691af91f0391f1e0f481de2a8c0f0",
+      "path": "source_assets/environments/objects/signpost.glb",
+      "task": "HWR-ENV-001",
+      "available_on_main": false,
+      "source_commit": "5544f88aa4c17a288f655fffd348ea19e90dce42",
+      "existing_asset_ids": [
+        "cloud_sign"
+      ],
+      "binary_geometry_review": "Pending implementer inspection."
+    },
+    {
+      "bytes": 58886172,
+      "git_blob": "653f507a340e70f5ef0a09a2d307afc48d567a89",
+      "oid": "59021fc14bd010da778fee9ab03e6a901852a728e239a9cc3df800ceb1ddedaf",
+      "path": "source_assets/environments/objects/stone well.glb",
+      "task": "HWR-ENV-001",
+      "available_on_main": true,
+      "source_commit": "22a21cf974479cb6fc213fe9c0120e31520db6d1",
+      "existing_asset_ids": [
+        "well"
+      ],
+      "binary_geometry_review": "Hash matches locally edited and validated clear-water model; engine verification still needed."
+    },
+    {
+      "bytes": 57609728,
+      "git_blob": "94c31b505c90581095ec3b3febbd7e442ff6581c",
+      "oid": "db36dd0a56da1b4fd29e8622928e7c8aa8528a6518eb09255192fbea4cb02294",
+      "path": "source_assets/environments/objects/stone workbench.glb",
+      "task": "HWR-ENV-001",
+      "available_on_main": false,
+      "source_commit": "5544f88aa4c17a288f655fffd348ea19e90dce42",
+      "existing_asset_ids": [
+        "quarry"
+      ],
+      "binary_geometry_review": "Pending implementer inspection."
+    },
+    {
+      "bytes": 57545824,
+      "git_blob": "8598995a0cda5db1981d274949c98c28d54ed247",
+      "oid": "aec969e140710e5b438bd984814b84b23643a73abeda268aa4812d556cd6d36d",
+      "path": "source_assets/environments/objects/tree 3d model.glb",
+      "task": "HWR-ENV-001",
+      "available_on_main": true,
+      "source_commit": "22a21cf974479cb6fc213fe9c0120e31520db6d1",
+      "existing_asset_ids": [
+        "tree",
+        "flower_tree"
+      ],
+      "binary_geometry_review": "Pending implementer inspection."
+    },
+    {
+      "bytes": 58195148,
+      "git_blob": "f8c8d9a0f3bc7c54a7c33bc1df63a3e1fef5a89a",
+      "oid": "8ed985e0e6425f73950300d44b0f91bfb30d01ded94ebacd5e5a4a277764b5c0",
+      "path": "source_assets/environments/objects/warehouse.glb",
+      "task": "HWR-ENV-001",
+      "available_on_main": true,
+      "source_commit": "22a21cf974479cb6fc213fe9c0120e31520db6d1",
+      "existing_asset_ids": [
+        "shed"
+      ],
+      "binary_geometry_review": "Pending implementer inspection."
+    },
+    {
+      "bytes": 57584164,
+      "git_blob": "af099da0e2b9b6a1cc73aabf4cd39da1d5a67c15",
+      "oid": "977e43e6c773aa7be87cc4d82411abd714224cb081255888d40d46d39a5184d6",
+      "path": "source_assets/environments/objects/wood workbench.glb",
+      "task": "HWR-ENV-001",
+      "available_on_main": false,
+      "source_commit": "5544f88aa4c17a288f655fffd348ea19e90dce42",
+      "existing_asset_ids": [
+        "lumber"
+      ],
+      "binary_geometry_review": "Pending implementer inspection."
+    },
+    {
+      "bytes": 60363036,
+      "git_blob": "03709af9e3781aa85e2829d925c7f5b3925d5376",
+      "oid": "2f9003c54d01f66b76af992fb2eb5f48449dfeac78a16e9c95b9c207beee7363",
+      "path": "source_assets/environments/tiles/grass block 3d model.glb",
+      "task": "HWR-GRASS-001",
+      "available_on_main": true,
+      "source_commit": "22a21cf974479cb6fc213fe9c0120e31520db6d1",
+      "existing_asset_ids": [],
+      "binary_geometry_review": "Pending implementer inspection."
+    }
+  ]
+}
