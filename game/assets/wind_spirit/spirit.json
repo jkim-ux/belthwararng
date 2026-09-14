@@ -1,0 +1,11 @@
+{
+  "source_sha256": "85208cf2176d07c9d3551ca0e630275c8d2295383c550ba5e0eea8b12b457e45",
+  "output_sha256": "25d6198e054f3654d41c9571c71d5ae4edbcad3e90e64d537937a82bd6b81398",
+  "triangles": 64000,
+  "vertices": 39376,
+  "bytes": 4621304,
+  "texture_images_unchanged": true,
+  "boundary_edges": 0,
+  "nonmanifold_edges": 0,
+  "bones": 5
+}

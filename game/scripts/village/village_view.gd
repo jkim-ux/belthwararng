@@ -766,6 +766,8 @@ func _style(color: Color) -> StyleBoxFlat:
 
 func _lbl(text: String, size: int = 14, color: Color = Color(0.95, 0.93, 0.88)) -> Label:
 	var l := Label.new()
+	# VillageView is a Node2D, so the parent Control theme does not propagate here.
+	l.add_theme_font_override("font", UiFont.FONT)
 	l.text = text
 	l.add_theme_font_size_override("font_size", size)
 	l.add_theme_color_override("font_color", color)
@@ -775,6 +777,7 @@ func _lbl(text: String, size: int = 14, color: Color = Color(0.95, 0.93, 0.88)) 
 
 func _btn(text: String, on_pressed: Callable, enabled: bool = true) -> Button:
 	var b := Button.new()
+	b.add_theme_font_override("font", UiFont.FONT)
 	b.text = text
 	b.disabled = not enabled
 	b.pressed.connect(on_pressed)
