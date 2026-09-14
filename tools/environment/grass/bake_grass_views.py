@@ -20,9 +20,11 @@ TOP_W = int(argv[2]) if len(argv) > 2 else 2048
 TOP_H = int(argv[3]) if len(argv) > 3 else 1024
 os.makedirs(OUT, exist_ok=True)
 
-# Measured slab footprint of the source (glTF units). Bottom face spans x[-0.462,0.464] z[-0.466,0.465].
-X_CENTER, X_HALF = 0.001, 0.463
-Z_CENTER, Z_HALF = -0.0005, 0.4655
+# Measured slab footprint of the source (glTF units). Bottom face spans x[-0.462,0.464] z[-0.466,0.465];
+# the vertical dirt wall sits ~0.008 inside that, so the sampled footprint is inset to stay on the wall.
+X_CENTER, X_HALF = 0.001, 0.455
+Z_CENTER, Z_HALF = -0.0005, 0.455
+WALL_OUTER = 0.4655                        # actual outer dirt wall / bottom face extent
 CELL_W, CELL_D = 2.0, 0.9                  # VillageStage3D.CELL_W / CELL_D
 SCALE = CELL_W / (2.0 * X_HALF)            # source -> world, uniform (2.1598)
 BAND = CELL_D / SCALE                      # 0.4167 source units of depth per tile
@@ -164,11 +166,11 @@ for band, z_center in BANDS.items():
 # ---------------------------------------------------------------- front strip (shared by all sides)
 SIDE_W, SIDE_HPX = 2048, 256
 side_aspect_y = (SIDE_H / (2.0 * X_HALF)) / (SIDE_HPX / SIDE_W)
-front_y = -(Z_CENTER + Z_HALF)                     # blender y of the near (glTF +Z) face
+front_y = -(Z_CENTER + WALL_OUTER)                 # blender y of the near (glTF +Z) dirt wall
 cam.location = (X_CENTER, front_y - 1.0, SIDE_H / 2.0)
 cam.rotation_euler = (np.radians(90.0), 0.0, 0.0)  # look along +Y (into the block)
 cam.data.ortho_scale = 2.0 * X_HALF
-cam.data.clip_start = 1.0 - 0.005
+cam.data.clip_start = 1.0 - 0.006
 cam.data.clip_end = 1.0 + SIDE_DEPTH
 render_pass("side_color", MATS["color"], SIDE_W, SIDE_HPX, side_aspect_y, 16, 1.5, transparent=True)
 render_pass("side_normal", MATS["normal"], SIDE_W, SIDE_HPX, side_aspect_y, 1, 0.01, transparent=True)
