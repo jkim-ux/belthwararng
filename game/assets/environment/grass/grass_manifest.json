@@ -1,0 +1,89 @@
+{
+ "task": "HWR-GRASS-001",
+ "source": {
+  "path": "/Users/JHKIM/Documents/GitHub/belthwararng/source_assets/environments/tiles/grass block 3d model.glb",
+  "bytes": 60363036,
+  "sha256": "2f9003c54d01f66b76af992fb2eb5f48449dfeac78a16e9c95b9c207beee7363",
+  "tris": 1929690,
+  "verts": 1053084,
+  "textures": "3x 4096x4096 JPEG (basecolor, metallic/roughness, normal)",
+  "license": "user-provided Tripo generation (grass block 3d model)"
+ },
+ "tools": {
+  "blender": "5.2.1 LTS",
+  "numpy": "2.5.2",
+  "python": "3.12.9"
+ },
+ "units": "1 unit = 1 Godot world unit; one tile = one village cell VillageStage3D.CELL_W x CELL_D",
+ "footprint_world": [
+  2.0,
+  0.9
+ ],
+ "pivot": "tile centre; y=0 = lowest turf/dirt point (village ground plane); walls extend to -WALL_DEPTH",
+ "wall_depth_world": 0.2,
+ "source_to_world_scale": 2.1978021978021975,
+ "source_y_reference": 0.057082989689008684,
+ "sampled_source_footprint": {
+  "x_half": 0.455,
+  "z_band": 0.40950000000000003,
+  "bands": {
+   "a": -0.23575000000000002,
+   "b": 0.24975
+  }
+ },
+ "fixed_parts": "UV2.x = bend mask: wall (UV2.y=0.5) and turf roots are 0, tips reach 1",
+ "atlas": {
+  "size": [
+   2048,
+   1536
+  ],
+  "rows": {
+   "turf": [
+    0,
+    1024
+   ],
+   "wall": [
+    1024,
+    1280
+   ],
+   "fin": [
+    1280,
+    1536
+   ]
+  },
+  "color": "sRGB RGBA (alpha only used by fins)",
+  "normal": "tangent-space, +Y up (glTF), roughness constant 0.92 (source RM map is flat: rough 0.92+-0.04, metal ~0)"
+ },
+ "lod": "LOD0 in the GLB; Godot importer meshes/generate_lods generates further levels (see report)",
+ "variants": {
+  "a": {
+   "file": "grass/grass_tile_a.glb",
+   "bytes": 7826956,
+   "sha256": "af3f0cea8fc3d7d0c5c1819c821f3d6cbba92ab84bd80d5a2338d81e239399de",
+   "verts": 9169,
+   "tris": 17156,
+   "holes_filled_texels": 0,
+   "turf_height_world_min": 0.004395604395604399,
+   "turf_height_world_mean": 0.10337641192887248,
+   "turf_height_world_max": 0.19369637600166828,
+   "turf_tris": 16384,
+   "wall_tris": 768,
+   "fin_tris": 4
+  },
+  "b": {
+   "file": "grass/grass_tile_b.glb",
+   "bytes": 7960584,
+   "sha256": "557e0d945ada05f2efb430b8d4388d8c4ab50da8dc37671603f7a4655ec64e98",
+   "verts": 9169,
+   "tris": 17156,
+   "holes_filled_texels": 40113,
+   "turf_height_world_min": 0.0045008108591939695,
+   "turf_height_world_mean": 0.10114618883986659,
+   "turf_height_world_max": 0.1911208331010798,
+   "turf_tris": 16384,
+   "wall_tris": 768,
+   "fin_tris": 4
+  }
+ },
+ "seconds": 8.9
+}
